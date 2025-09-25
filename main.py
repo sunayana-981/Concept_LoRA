@@ -22,11 +22,7 @@ def main(args, logger=None):
         images_dir = "/data1/ai22resch11001/projects/data/mscoco/train2017"
         annotations_file = "/data1/ai22resch11001/projects/data/mscoco/annotations/instances_train2017.json"
 
-<<<<<<< HEAD
-    dataloader = get_dataloader(args.dataset, images_dir, annotations_file, subset=0.01, batch_size=args.batch_size)
-=======
     _, dataloader = get_dataloader(args.dataset, images_dir, annotations_file, subset=1, batch_size=args.batch_size)
->>>>>>> 2da3a407b92205850c988d32a015c36f1426c309
     base_model = get_model(args.base_model_name) 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     base_model.to(device)
