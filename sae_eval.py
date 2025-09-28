@@ -6,6 +6,9 @@ from torchvision import datasets
 import torchvision.utils as vutils
 import matplotlib.pyplot as plt
 import open_clip
+from dataloader import get_dataloader
+import json
+from utils import collect_clip_embeddings
 
 # ---- SAE loader (rebuild from checkpoint shapes) ----
 def build_sae_from_state_dict(state_dict):
@@ -43,17 +46,6 @@ def cifar100_loader(preprocess, split="train", batch_size=256):
     dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
     return ds, dl
 
-@torch.no_grad()
-def collect_clip_embeddings(model, dl, device):
-    embs = []
-    for imgs, _ in dl:
-        imgs = imgs.to(device, non_blocking=True)
-        x = model.encode_image(imgs).float()   # [B, D]
-        x = F.normalize(x, dim=-1)
-        embs.append(x.cpu())
-    X = torch.cat(embs, dim=0)                # [N, D]
-    return X
-
 def standardize_with_stats(X, mean, std):
     return (X - mean) / std.clamp_min(1e-6)
 
@@ -61,13 +53,21 @@ def standardize_with_stats(X, mean, std):
 def topk_indices_for_neuron(Z, j, k):
     return torch.topk(Z[:, j], k).indices.tolist()
 
+# Write a function to get the clip embeddings of the top 5 images for each neuron and stack them in an array
+@torch.no_grad()
+def b1(ds_raw, indices):
+    imgs = [ds_raw[i][0] for i in indices]
+    
+
 def save_topk_grid(ds_raw, indices, out_path, ncol=8):
     imgs = [ds_raw[i][0] for i in indices]  # already preprocessed tensors
     grid = vutils.make_grid(imgs, nrow=ncol, normalize=True, scale_each=True)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.figure(figsize=(ncol*1.5, max(1, len(indices)//ncol)*1.5))
-    plt.axis("off"); plt.imshow(grid.permute(1, 2, 0))
-    plt.savefig(out_path, bbox_inches="tight", dpi=200); plt.close()
+    plt.axis("off")
+    plt.imshow(grid.permute(1, 2, 0))
+    plt.savefig(out_path, bbox_inches="tight", dpi=200)
+    plt.close()
 
 @torch.no_grad()
 def text_align_atoms(clip_model, labels, atoms, device):
@@ -96,30 +96,48 @@ def class_prototype_align(Xn, y, atoms, num_classes=100):
     atoms = F.normalize(atoms, dim=0)       # [D, H]
     return P @ atoms                        # [C, H]
 
+def get_class_names(annotations_file):
+    with open(annotations_file, 'r') as f:
+        data = json.load(f)
+    class_names = []
+    for cat in data['categories']:
+        class_names.append(cat['name'])
+    return class_names
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", type=str, default="sae_clip_cifar100.pth", help="Checkpoint with state_dict, mean, std")
+    ap.add_argument("--ckpt", type=str, default="/data1/ai22resch11001/projects/Concept_LoRA/saved_models/mscoco/exp_2025:09:25-23:20:27/sae_model_epoch_50.pt", help="Checkpoint with state_dict, mean, std")
     ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--model", type=str, default="ViT-B-32")
+    ap.add_argument("--dataset", type=str, default="mscoco")
     ap.add_argument("--pretrained", type=str, default="openai")
     ap.add_argument("--batch_size", type=int, default=256)
     ap.add_argument("--neuron", type=int, default=0, help="Neuron index to inspect")
     ap.add_argument("--topk", type=int, default=16)
-    ap.add_argument("--outdir", type=str, default="concept_inspect")
+    ap.add_argument("--outdir", type=str, default="concept_inspect_50")
     ap.add_argument("--dump_csv", action="store_true", help="Dump per-neuron summaries for all neurons")
+    ap.add_argument("--construct_b1", action="store_true", help="Construct the b1 matrix")
     args = ap.parse_args()
 
     # 1) Load SAE checkpoint
     ckpt = torch.load(args.ckpt, map_location="cpu")
     sae = build_sae_from_state_dict(ckpt["state_dict"]).to(args.device).eval()
-    mean = ckpt["mean"]; std = ckpt["std"]
+    mean = ckpt["mean"]
+    std = ckpt["std"]
     in_dim = mean.shape[1]; h_dim = sae.decoder[0].weight.shape[1]
     print(f"[SAE] in_dim={in_dim}, h_dim={h_dim}")
 
     # 2) CLIP + CIFAR100
     clip_model, preprocess = load_clip(args.model, args.pretrained, args.device)
-    ds, dl = cifar100_loader(preprocess, "train", args.batch_size)
-    class_names = ds.classes  # CIFAR-100 label names
+    if args.dataset == "cifar100":
+        ds, dl = cifar100_loader(preprocess, "train", args.batch_size)
+        class_names = ds.classes  # CIFAR-100 label names
+    elif args.dataset == "mscoco":
+        images_dir = "/data1/ai22resch11001/projects/data/mscoco/train2017"
+        annotations_file = "/data1/ai22resch11001/projects/data/mscoco/annotations/instances_train2017.json"
+        ds, dl = get_dataloader("mscoco", images_dir, annotations_file, subset=1, batch_size=args.batch_size)
+        class_names = get_class_names(annotations_file)
 
     # 3) Collect CLIP embeddings; standardize with saved stats
     X = collect_clip_embeddings(clip_model, dl, args.device)        # [N, D]
@@ -132,15 +150,24 @@ def main():
     Z = Z.detach().cpu()
     atoms = sae.decoder[0].weight.data.cpu()  # [D, H]
 
-    # 5) Top-activating images for one neuron + grid
+    # # 5) Top-activating images for one neuron + grid
+    b1 = []
     for j in range(h_dim):
         idxs = topk_indices_for_neuron(Z, j, args.topk)
         grid_path = os.path.join(args.outdir, f"neuron_{j}_top{args.topk}.png")
+        if args.construct_b1:
+            print("saving")
+            b1.append(X[idxs].mean(dim=0))  
         save_topk_grid(ds, idxs, grid_path, ncol=min(8, args.topk))
         if j % 100 == 0:  # log every 100 neurons
             print(f"[Neuron {j}] saved top-{args.topk} image grid → {grid_path}")
 
-    # 6) Text alignment against CIFAR-100 names
+    if args.construct_b1:
+        b1 = torch.stack(b1, dim=1)  
+        print("b1 shape:", b1.shape)  
+        torch.save(b1, os.path.join(args.outdir, f"b1_matrix_{args.dataset}.pt"))
+    
+    # # 6) Text alignment against CIFAR-100 names
     S_txt = text_align_atoms(clip_model, class_names, atoms, args.device)  # [100, H]
     top_txt = torch.topk(S_txt[:, j], 5).indices.tolist()
     print(f"[Neuron {j}] top text labels:", [class_names[i] for i in top_txt])
@@ -148,6 +175,7 @@ def main():
     # 7) Class-prototype alignment (image side)
     # Need labels in the same order as X; CIFAR loader gives that implicitly.
     # Re-iterate once to collect labels:
+    
     ys = []
     for _, yb in dl:
         ys.append(yb)
@@ -159,6 +187,7 @@ def main():
     # 8) Optional: dump a CSV summary for ALL neurons (top-3 text & classes)
     if args.dump_csv:
         csv_path = os.path.join(args.outdir, "neurons_summary.csv")
+        print("Here!")
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["neuron", "top_text_1", "top_text_2", "top_text_3",
