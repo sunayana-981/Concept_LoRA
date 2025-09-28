@@ -33,16 +33,7 @@ class SparseAutoencoder(nn.Module):
     def loss_function(self, x_hat, x, z):
         return F.mse_loss(x_hat, x) + self.sparsity_penalty(z)
     
-def get_model(model_name, d_in=None):
-    if model_name == "sae":
-        model = SparseAutoencoder(
-            in_dims=d_in,
-            h_dims=8192,                  # 8k codebook for a simple run
-            sparsity_lambda=1e-4,
-            sparsity_target=0.05,
-            xavier_norm_init=True
-        )
-    
+def get_base_model(model_name, d_in=None):
     if "clip" in model_name:
         model, _, preprocess = open_clip.create_model_and_transforms("ViT-B-32", pretrained="openai")
-    return model
+    return model, preprocess

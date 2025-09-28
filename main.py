@@ -6,8 +6,8 @@ import os
 import json
 from datetime import datetime
 from dataloader import get_dataloader
-from model import get_model
-from train import train_sae, preprocess
+from model import SparseAutoencoder, get_base_model
+from train import train_sae, preprocess_loader
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -21,15 +21,28 @@ def main(args, logger=None):
     if args.dataset == "mscoco":
         images_dir = "/data1/ai22resch11001/projects/data/mscoco/train2017"
         annotations_file = "/data1/ai22resch11001/projects/data/mscoco/annotations/instances_train2017.json"
+    elif args.dataset == "cifar100":
+        images_dir = None
+        annotations_file = None
+    elif args.dataset == "cc3m":
+        images_dir = None
+        annotations_file = None
 
-    _, dataloader = get_dataloader(args.dataset, images_dir, annotations_file, subset=1, batch_size=args.batch_size)
-    base_model = get_model(args.base_model_name) 
+    base_model, preprocess = get_base_model(args.base_model_name) 
+    _, dataloader = get_dataloader(args.dataset, images_dir, annotations_file, transform=preprocess, subset=1, batch_size=args.batch_size)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     base_model.to(device)
 
-    processed_loader, mean, std, d_in = preprocess(base_model, dataloader, device, batch_tokens=4096)
+    processed_loader, mean, std, d_in = preprocess_loader(base_model, dataloader, device, batch_tokens=4096)
 
-    sae_model = get_model("sae", d_in=d_in)
+    sae_model = SparseAutoencoder(
+            in_dims=d_in,
+            h_dims=1000,                  # 8k codebook for a simple run
+            sparsity_lambda=1e-4,
+            sparsity_target=0.05,
+            xavier_norm_init=True
+        )
+    
     train_sae(args, sae_model, processed_loader, mean, std, device, epochs=args.epochs, lr=args.lr)
 
 if __name__ == "__main__":
