@@ -30,7 +30,7 @@ def train_sae(args, sae_model, train_loader, mean, std, device, epochs=10, lr=3e
     print(f"Saved to {model_path}")
     
 
-def preprocess(model, loader, device, batch_tokens=4096):
+def preprocess_loader(model, loader, device, batch_tokens=4096):
     embeddings = collect_clip_embeddings(model, loader, device)
     std_embeddings, mean, std = standardize(embeddings)
     dl = DataLoader(TensorDataset(std_embeddings), batch_size=4096, shuffle=True, pin_memory=True)
