@@ -33,3 +33,9 @@ saved_models/
 # Cache
 .cache/
 __pycache__/
+*.log
+*.__pycache____
+*.tm
+*.pyc
+Documents/Concept_LoRA/CLIP_LoRA/loralib/__pycache__/
+Documents/Concept_LoRA/CLIP_LoRA/loralib/*.pyc
