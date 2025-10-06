@@ -39,3 +39,10 @@ __pycache__/
 *.pyc
 Documents/Concept_LoRA/CLIP_LoRA/loralib/__pycache__/
 Documents/Concept_LoRA/CLIP_LoRA/loralib/*.pyc
+
+./clip_vitb32_lora_merged.pt
+*.pth
+*.ckpt
+*.bin
+*.npz
+*.npy

@@ -5,7 +5,7 @@ do
     echo "Running MSCOCO with seed $seed on GPU $gpu_id"
     CUDA_VISIBLE_DEVICES=$gpu_id python main.py \
                 --seed $seed \
-                --dataset mscoco \
+                --dataset  \
                 --base_model_name clip_vit-b-32 \
                 --lr 3e-4 \
                 --epochs 20 \
