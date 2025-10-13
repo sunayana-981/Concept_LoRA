@@ -12,7 +12,10 @@ from torch.optim.lr_scheduler import (
 @torch.no_grad()
 def collect_clip_embeddings(model, dl, device):
     embs = []
-    for imgs in dl:
+    for imgs, labels in dl:
+        # handle case where imgs is a list of tensors (e.g., CIFAR100 torchvision)
+        if isinstance(imgs, (list, tuple)):
+            imgs = torch.stack(imgs, dim=0)
         imgs = imgs.to(device, non_blocking=True)
         x = model.encode_image(imgs)          # [B, Dproj] (e.g., Dproj=512 for ViT-B-32)
         x = F.normalize(x, dim=-1)            # already normalized by CLIP, but keep it safe

@@ -4,7 +4,7 @@ from CLIP_LoRA import clip
 from CLIP_LoRA.datasets import build_dataset
 from CLIP_LoRA.datasets.utils import build_data_loader
 
-from utils import *
+from CLIP_LoRA.utils import *
 from CLIP_LoRA.run_utils import *
 from CLIP_LoRA.lora import run_lora
 

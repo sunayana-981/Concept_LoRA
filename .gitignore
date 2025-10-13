@@ -28,8 +28,9 @@ datasets/
 concept_inspect/
 saved_models/
 
-
-
+weights/
+logs/
+plots/
 # Cache
 .cache/
 __pycache__/
