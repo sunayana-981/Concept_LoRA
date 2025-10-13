@@ -155,9 +155,6 @@ def main():
     for j in range(h_dim):
         idxs = topk_indices_for_neuron(Z, j, args.topk)
         grid_path = os.path.join(args.outdir, f"neuron_{j}_top{args.topk}.png")
-        if args.construct_b1:
-            print("saving")
-            b1.append(X[idxs].mean(dim=0))  
         save_topk_grid(ds, idxs, grid_path, ncol=min(8, args.topk))
         if j % 100 == 0:  # log every 100 neurons
             print(f"[Neuron {j}] saved top-{args.topk} image grid → {grid_path}")
@@ -187,7 +184,6 @@ def main():
     # 8) Optional: dump a CSV summary for ALL neurons (top-3 text & classes)
     if args.dump_csv:
         csv_path = os.path.join(args.outdir, "neurons_summary.csv")
-        print("Here!")
         with open(csv_path, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["neuron", "top_text_1", "top_text_2", "top_text_3",
