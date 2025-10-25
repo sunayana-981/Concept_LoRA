@@ -47,3 +47,10 @@ Documents/Concept_LoRA/CLIP_LoRA/loralib/*.pyc
 *.bin
 *.npz
 *.npy
+
+Documents/Concept_LoRA/Discover-then-Name/saved_models/
+Documents/Concept_LoRA/Discover-then-Name/logs/
+Documents/Concept_LoRA/Discover-then-Name/wandb/
+
+*.tsv
+training/

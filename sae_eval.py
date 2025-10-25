@@ -164,7 +164,7 @@ def main():
     ap.add_argument("--topk", type=int, default=16)
     ap.add_argument("--outdir", type=str, default="plots/concept_inspect_lora_cub")
     ap.add_argument("--dump_csv", action="store_true", help="Dump per-neuron summaries")
-    ap.add_argument("--construct_b1", action="store_true", default=True, help="Construct the b1 matrix")
+    ap.add_argument("--construct_b1", action="store_true",  help="Construct the b1 matrix")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
