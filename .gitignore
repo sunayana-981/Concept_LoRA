@@ -24,12 +24,33 @@ analysis/
 data/
 datasets/
 
-
-concept_inspect/
+concept_inspection/
 saved_models/
 
-
-
+weights/
+logs/
+plots/
 # Cache
 .cache/
 __pycache__/
+*.log
+*.__pycache____
+*.tm
+*.pyc
+Documents/Concept_LoRA/CLIP_LoRA/loralib/__pycache__/
+Documents/Concept_LoRA/CLIP_LoRA/loralib/*.pyc
+
+./clip_vitb32_lora_merged.pt
+*.pth
+*.ckpt
+*.bin
+*.npz
+*.npy
+
+Documents/Concept_LoRA/Discover-then-Name/saved_models/
+Documents/Concept_LoRA/Discover-then-Name/logs/
+Documents/Concept_LoRA/Discover-then-Name/wandb/
+
+*.tsv
+training/
+concept_inspect_cc3m_1%/neuron_0_top16.png

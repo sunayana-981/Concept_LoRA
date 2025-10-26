@@ -1,0 +1,1 @@
+### These checkpoints and assigned names correspond to the SAE trained with learning rate 5e-4,  L1-coefficient 3e-5, and expansion factor 8.
