@@ -33,7 +33,7 @@ start_time = time()
 # --- HACK: OVERRIDE CONFIG VALUES ---
 # !! UPDATE THIS PATH TO YOUR CUB ACTIVATIONS !!
 args.data_dir_activations = {
-    'img': '/home/sunayana/Documents/Concept_LoRA/datasets/cub_feats_vitb16' 
+    'img': '/home/sunayana/Documents/Concept_LoRA/datasets/cub_feats_vitb16_lora_merged' 
 }
 print(f"[HACK] Overriding data_dir_activations to: {args.data_dir_activations['img']}")
 # --- END HACK ---
@@ -204,6 +204,7 @@ pipeline.run_pipeline(
     start_time=start_time,
     resample_epoch_freq=int(args.resample_freq) # Pass args.resample_freq directly per reference
 )
+
 
 # Standardized save (REMOVED per reference script)
 # The reference script does not perform the _standard_save call at the end.

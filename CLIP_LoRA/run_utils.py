@@ -20,13 +20,13 @@ def get_arguments():
     parser.add_argument('--seed', default=1, type=int)
     # Dataset arguments
     parser.add_argument('--root_path', type=str, default='')
-    parser.add_argument('--dataset', type=str, default='dtd')
+    parser.add_argument('--dataset', type=str, default='')
     parser.add_argument('--shots', default=16, type=int)
     # Model arguments
     parser.add_argument('--backbone', default='ViT-B/32', type=str)
     # Training arguments
     parser.add_argument('--lr', default=2e-4, type=float)
-    parser.add_argument('--n_iters', default=500, type=int)
+    parser.add_argument('--n_iters', default=100, type=int)
     parser.add_argument('--batch_size', default=32, type=int)
     # LoRA arguments
     parser.add_argument('--position', type=str, default='all', choices=['bottom', 'mid', 'up', 'half-up', 'half-bottom', 'all', 'top3'], help='where to put the LoRA modules')

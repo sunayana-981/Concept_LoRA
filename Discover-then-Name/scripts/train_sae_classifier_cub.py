@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import TensorDataset, DataLoader, Subset
 from torchvision import transforms
-from torchvision.datasets import ImageFolder
+from torchvision.datasets import ImageFolder 
 import pandas as pd
 from tqdm import tqdm
 import clip
@@ -176,18 +176,35 @@ def save_predictions(preds, labels, fname):
 # -----------------------
 # 6. Train on SAE Outputs
 # -----------------------
+
+def load_sae_from_ckpt(path, device="cuda"):
+    obj = torch.load(path, map_location=device, weights_only=True)
+    sd = obj["state_dict"] if isinstance(obj, dict) and "state_dict" in obj else (obj if isinstance(obj, dict) else obj.state_dict())
+    if "encoder._weight" in sd and sd["encoder._weight"].ndim == 3:
+        C, F, D = sd["encoder._weight"].shape
+    elif "decoder._weight" in sd and sd["decoder._weight"].ndim == 3:
+        C, D, F = sd["decoder._weight"].shape
+    else:
+        C, D = sd["tied_bias"].shape; F = sd["encoder._bias"].shape[-1]
+    sae = SparseAutoencoder(n_input_features=int(D), n_learned_features=int(F), n_components=int(C)).to(device)
+    sae.load_state_dict(sd, strict=False); sae.eval()
+    return sae, D, F, C
+
 def train_on_sae(args, features, labels):
     device = args.device
     features, labels = features.to(device), labels.to(device)
 
     input_dim = 512      # CLIP ViT-B/16
-    latent_dim = 4096    # Matches pretrained SAE
+    latent_dim = 2048    # Matches pretrained SAE
     sae = SparseAutoencoder(n_input_features=input_dim, n_learned_features=latent_dim, n_components=len(args.hook_points)).to(device)
 
-    ckpt_path = "/home/sunayana/Documents/Concept_LoRA/Discover-then-Name/pretrained/Checkpoints/clip_ViT-B:16_sparse_autoencoder_final.pt"
-    print(f"🔁 Loading SAE from: {ckpt_path}")
-    sae.load_state_dict(torch.load(ckpt_path, map_location=device))
-    sae.eval()
+    ckpt_path = "/home/sunayana/Documents/Concept_LoRA/Discover-then-Name/SAE/SAEImg/cub/clip_ViT-B16/out/lr0.0001_l1coeff0.0003_ef4_rf500000_hookout_bs4096_epo200/sae_checkpoints_cub_vitb16_d512/sparse_autoencoder_final.pt"
+    # print(f"🔁 Loading SAE from: {ckpt_path}")
+    # sae.load_state_dict(torch.load(ckpt_path, map_location=device))
+    # sae.eval()
+    sae, D, F, C = load_sae_from_ckpt(ckpt_path, device)
+    
+
 
     with torch.no_grad():
         latents, recons = sae(features)
@@ -255,3 +272,4 @@ if __name__ == "__main__":
     print(f"Latent Classifier - Acc: {acc_latent:.4f}, F1: {f1_latent:.4f}")
     print(f"Recon Classifier  - Acc: {acc_recon:.4f}, F1: {f1_recon:.4f}")
     print("\n📊 Logs available in 'logs/' and TensorBoard: 'logs/tensorboard/'")
+
