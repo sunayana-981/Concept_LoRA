@@ -1,0 +1,32 @@
+{
+  "total_datasets": 1,
+  "total_samples": 100,
+  "overall_stats": {
+    "sae_cosine_mean": 0.978774636387825,
+    "sae_cosine_std": 0.0,
+    "clip_cosine_mean": 0.9850155395269394,
+    "clip_cosine_std": 0.0,
+    "sae_l2_mean": 22.541190338134765,
+    "clip_l2_mean": 50.17216938018799
+  },
+  "per_dataset": [
+    {
+      "dataset_name": "ucf101",
+      "num_samples": 100,
+      "sae_cosine_mean": 0.978774636387825,
+      "sae_cosine_std": 0.009639521048377602,
+      "sae_cosine_min": 0.9356029629707336,
+      "sae_cosine_max": 0.9893935918807983,
+      "sae_l2_mean": 22.541190338134765,
+      "sae_l2_std": 3.8851958546246026,
+      "sae_sparsity_base_mean": 0.9919195061922074,
+      "sae_sparsity_lora_mean": 0.992049189209938,
+      "clip_cosine_mean": 0.9850155395269394,
+      "clip_cosine_std": 0.012930360456283409,
+      "clip_cosine_min": 0.9092483520507812,
+      "clip_cosine_max": 0.9955139756202698,
+      "clip_l2_mean": 50.17216938018799,
+      "clip_l2_std": 16.883826473084532
+    }
+  ]
+}

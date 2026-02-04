@@ -11,6 +11,9 @@ from CLIP_LoRA.lora import run_lora
 from CLIP_LoRA import clip as clip_pkg
 
 
+# Medical datasets that use direct DataLoader
+MEDICAL_DATASETS = ['medmnist', 'chexpert']
+
 
 def main():
 
@@ -29,7 +32,7 @@ def main():
         
     dataset = build_dataset(args.dataset, args.root_path, args.shots, preprocess)
     
-    if args.dataset == 'imagenet':
+    if args.dataset == 'imagenet' or args.dataset in MEDICAL_DATASETS:
         val_loader = torch.utils.data.DataLoader(dataset.val, batch_size=256, num_workers=8, shuffle=False, pin_memory=True)
         test_loader = torch.utils.data.DataLoader(dataset.test, batch_size=256, num_workers=8, shuffle=False, pin_memory=True)
     else:
@@ -45,7 +48,7 @@ def main():
             transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))
         ])
         
-        if args.dataset == 'imagenet':
+        if args.dataset == 'imagenet' or args.dataset in MEDICAL_DATASETS:
             train_loader = torch.utils.data.DataLoader(dataset.train_x, batch_size=args.batch_size, num_workers=8, shuffle=True, pin_memory=True)
         else:
             train_loader = build_data_loader(data_source=dataset.train_x, batch_size=args.batch_size, tfm=train_tranform, is_train=True, shuffle=True, num_workers=8)
@@ -53,4 +56,4 @@ def main():
     run_lora(args, clip_model, logit_scale, dataset, train_loader, val_loader, test_loader)
 
 if __name__ == '__main__':
-    main()  
+    main()
