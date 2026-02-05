@@ -22,7 +22,6 @@ analysis/
 
 # Data / Datasets
 data/
-datasets/
 
 concept_inspection/
 saved_models/
