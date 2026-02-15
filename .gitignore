@@ -38,7 +38,7 @@ __pycache__/
 *.pyc
 Documents/Concept_LoRA/CLIP_LoRA/loralib/__pycache__/
 Documents/Concept_LoRA/CLIP_LoRA/loralib/*.pyc
-
+Documents/Concept_LoRA/lora_merged/
 ./clip_vitb32_lora_merged.pt
 *.pth
 *.ckpt
@@ -46,18 +46,10 @@ Documents/Concept_LoRA/CLIP_LoRA/loralib/*.pyc
 *.npz
 *.npy
 
-Documents/Concept_LoRA/Discover-then-Name/saved_models/
-Documents/Concept_LoRA/Discover-then-Name/logs/
-Documents/Concept_LoRA/Discover-then-Name/wandb/
-
 *.tsv
 training/
 Documents/Concept_LoRA/patchsae/diff_neuron_plots/
-concept_inspect_cc3m_1%/neuron_0_top16.png
 concept_eval/
-Discover-then-Name/concept_grids_all/
-Discover-then-Name/concept_grids_all_base/
-Discover-then-Name/concept_grids_cub_lora/
 
 
 
