@@ -52,6 +52,7 @@ Documents/Concept_LoRA/Discover-then-Name/wandb/
 
 *.tsv
 training/
+Documents/Concept_LoRA/patchsae/diff_neuron_plots/ 
 <<<<<<< HEAD
 concept_inspect_cc3m_1%/neuron_0_top16.png
 =======
@@ -67,3 +68,5 @@ Discover-then-Name/concept_grids_cub_lora/
 *.npz
 *.npy
 >>>>>>> 32f8ee2 (Update .gitignore)
+
+

@@ -1,0 +1,25 @@
+metric,value
+total_images,13320
+top_k,5
+target_patch,88
+""
+--- Global ---,
+global_same_top1_count,12574
+global_same_top1_pct,94.4%
+global_diff_top1_count,746
+global_diff_top1_pct,5.6%
+global_avg_top5_overlap,4.96/5
+global_avg_top5_overlap,4.96/5
+""
+--- Patch 88 ---,
+patch88_same_top1_count,10377
+patch88_same_top1_pct,77.9%
+patch88_diff_top1_count,2943
+patch88_diff_top1_pct,22.1%
+patch88_avg_top5_overlap,4.12/5
+patch88_avg_top5_overlap,4.12/5
+""
+--- Patch 88 Activation Diffs ---,
+patch88_avg_l2_diff,1.4886
+patch88_avg_max_abs_diff,0.5171
+patch88_avg_mean_abs_diff,0.000401
