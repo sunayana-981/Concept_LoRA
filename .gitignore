@@ -36,9 +36,9 @@ __pycache__/
 *.__pycache____
 *.tm
 *.pyc
-Documents/Concept_LoRA/CLIP_LoRA/loralib/__pycache__/
-Documents/Concept_LoRA/CLIP_LoRA/loralib/*.pyc
-Documents/Concept_LoRA/lora_merged/
+CLIP_LoRA/loralib/__pycache__/
+CLIP_LoRA/loralib/*.pyc
+lora_merged/
 ./clip_vitb32_lora_merged.pt
 *.pth
 *.ckpt
@@ -48,7 +48,7 @@ Documents/Concept_LoRA/lora_merged/
 
 *.tsv
 training/
-Documents/Concept_LoRA/patchsae/diff_neuron_plots/
+patchsae/diff_neuron_plots/
 concept_eval/
 
 
