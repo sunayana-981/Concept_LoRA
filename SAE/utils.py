@@ -9,19 +9,52 @@ from torch.optim.lr_scheduler import (
     ConstantLR,
 )
 
+# @torch.no_grad()
+# def collect_clip_embeddings(model, dl, device):
+#     embs = []
+#     for imgs in dl:
+#         imgs = imgs.to(device, non_blocking=True)
+#         x = model.encode_image(imgs)          # [B, Dproj] (e.g., Dproj=512 for ViT-B-32)
+#         x = F.normalize(x, dim=-1)            # already normalized by CLIP, but keep it safe
+#         embs.append(x.cpu())
+#     X = torch.cat(embs, dim=0)                # [N, Dproj]
+#     return X
+
 @torch.no_grad()
-def collect_clip_embeddings(model, dl, device):
-    embs = []
-    for imgs, labels in dl:
-        # handle case where imgs is a list of tensors (e.g., CIFAR100 torchvision)
-        if isinstance(imgs, (list, tuple)):
-            imgs = torch.stack(imgs, dim=0)
-        imgs = imgs.to(device, non_blocking=True)
-        x = model.encode_image(imgs)          # [B, Dproj] (e.g., Dproj=512 for ViT-B-32)
-        x = F.normalize(x, dim=-1)            # already normalized by CLIP, but keep it safe
-        embs.append(x.cpu())
-    X = torch.cat(embs, dim=0)                # [N, Dproj]
+@torch.no_grad()
+def collect_clip_embeddings(model, dataloader, device):
+    model.eval()
+    all_feats = []
+
+    for batch in dataloader:
+        # ImageNet / CIFAR / CUB → batch is (imgs, labels)
+        if isinstance(batch, (list, tuple)):
+            imgs = batch[0]
+        else:
+            imgs = batch
+
+        imgs = imgs.to(device)
+
+        tokens = {}
+
+        def hook_fn(module, input, output):
+            tokens["x"] = output
+
+        h = model.visual.transformer.register_forward_hook(hook_fn)
+        _ = model.visual(imgs)
+        h.remove()
+
+        x = tokens["x"]        # [B, 197, 768]
+        cls = x[:, 0]          # [B, 768]
+
+        all_feats.append(cls.cpu())
+
+    X = torch.cat(all_feats, dim=0)  # [N, 768]
     return X
+
+
+
+
 
 def standardize(X):
     mean = X.mean(dim=0, keepdim=True)

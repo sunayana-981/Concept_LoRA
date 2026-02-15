@@ -10,8 +10,15 @@ import torchvision.utils as vutils
 import matplotlib.pyplot as plt
 import open_clip
 
+
 from SAE.dataloader import get_dataloader
 from SAE.utils import collect_clip_embeddings
+
+from torchvision.datasets import Caltech101, OxfordIIITPet
+from torchvision.transforms import ToTensor, Resize, Compose, Lambda
+
+from model import SparseAutoencoder
+from integrate_mono import weighted_pairwise_cosine, per_class_monosemanticity, dataset_monosemanticity, topk_neurons_overall
 
 
 # -----------------------
@@ -144,39 +151,106 @@ def get_class_names(path_or_dir):
 
 def safe_load_checkpoint(path):
     try:
-        return torch.load(path, map_location="cpu", weights_only=True)
+        return torch.load(path, map_location="cpu", weights_only=False)
     except TypeError:
         # older torch without weights_only
         return torch.load(path, map_location="cpu")
+    
+# def safe_load_checkpoint2(path):
+#     try:
+#         # Load the checkpoint
+#         ckpt = torch.load(path, map_location="cpu")
+#         state_dict = ckpt["state_dict"]
+        
+#         # Extract dimensions from the checkpoint
+#         h_dims, in_dims = state_dict["W_enc"].shape
+#         print('1')
+#         # Initialize the SparseAutoencoder model with the correct dimensions
+#         model = SparseAutoencoder(in_dims, h_dims)
+#         print('2')
+#         # Map the keys to match SparseAutoencoder's layer names
+#         mapped_state_dict = {
+#             "encoder.0.weight": state_dict["W_enc"],
+#             "encoder.0.bias": state_dict["b_enc"],
+#             "decoder.0.weight": state_dict["W_dec"],
+#             "decoder.0.bias": state_dict["b_dec"],
+#         }
+        
+#         # Load the mapped weights
+#         model.load_state_dict(mapped_state_dict)
+#         model.eval()
+#         return model
+#     except Exception as e:
+#         print(f"Error loading checkpoint: {e}")
+#         raise
+        
+def safe_load_checkpoint2(path):
+    ckpt = torch.load(path, map_location="cpu")
+    sd = ckpt["state_dict"]
+
+    # checkpoint uses math convention:
+    # W_enc: [D, H]
+    # b_enc: [H]
+
+    D, H = sd["W_enc"].shape
+
+    print("Input dim:", D)
+    print("Hidden dim:", H)
+
+    model = SparseAutoencoder(D, H)
+
+    mapped = {
+        # transpose weights for PyTorch
+        "encoder.0.weight": sd["W_enc"].T,
+        "encoder.0.bias": sd["b_enc"],
+        "decoder.0.weight": sd["W_dec"].T,
+        "decoder.0.bias": sd["b_dec"],
+    }
+
+    model.load_state_dict(mapped, strict=True)
+    model.eval()
+    return model
+
+
+
+
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", type=str, default="weights/SAE/base/cifar100/exp_2025:10:13-05:35:21/sae_model_epoch_20.pt",
+    ap.add_argument("--ckpt", type=str, default="/DATA/cs22btech11053/Concept_Lora/out.pt",
                     help="Checkpoint with keys: state_dict, mean, std")
     ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--model", type=str, default="ViT-B-32")
-    ap.add_argument("--dataset", type=str, default="cifar100", choices=["cifar100", "mscoco", "cub"])
+    ap.add_argument("--model", type=str, default="ViT-B-16")
+    ap.add_argument("--dataset", type=str, default="OxfordIIITPet", choices=["cifar100", "mscoco", "cub", "imagenet", "caltech101", "OxfordIIITPet"])
     ap.add_argument("--pretrained", type=str, default="openai")
     ap.add_argument("--batch_size", type=int, default=256)
     ap.add_argument("--neuron", type=int, default=0, help="Neuron index to inspect")
     ap.add_argument("--topk", type=int, default=16)
-    ap.add_argument("--outdir", type=str, default="plots/concept_inspect_lora_cub")
+    ap.add_argument("--outdir", type=str, default="plots/concept_inspect_lora_imagenet")
     ap.add_argument("--dump_csv", action="store_true", help="Dump per-neuron summaries")
     ap.add_argument("--construct_b1", action="store_true",  help="Construct the b1 matrix")
+    ap.add_argument("--bool_test", type=bool, default=False, help="Run a quick test with a small subset of data")
     args = ap.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
 
     # 1) Load SAE checkpoint
     ckpt = safe_load_checkpoint(args.ckpt)
-    assert "state_dict" in ckpt and "mean" in ckpt and "std" in ckpt, \
-        "Checkpoint must contain state_dict, mean, std"
-    sae = build_sae_from_state_dict(ckpt["state_dict"]).to(args.device).eval()
-    mean = ckpt["mean"]
-    std = ckpt["std"]
-    in_dim = mean.shape[1]
-    h_dim = sae.decoder[0].weight.shape[1]
+    # assert "state_dict" in ckpt and "mean" in ckpt and "std" in ckpt, \
+    #     "Checkpoint must contain state_dict, mean, std"
+    # sae = build_sae_from_state_dict(ckpt["state_dict"]).to(args.device).eval()
+    # mean = ckpt["mean"]
+    # std = ckpt["std"]
+    # in_dim = mean.shape[1]
+    # h_dim = sae.decoder[0].weight.shape[1]
+    # print(f"[SAE] in_dim={in_dim}, h_dim={h_dim}")
+
+    sae = safe_load_checkpoint2(args.ckpt).to(args.device).eval()
+    in_dim = sae.encoder[0].weight.shape[1]
+    h_dim = sae.encoder[0].weight.shape[0]
+    mean = torch.zeros((1, in_dim))
+    std = torch.ones((1, in_dim))
     print(f"[SAE] in_dim={in_dim}, h_dim={h_dim}")
 
     # 2) CLIP + dataset
@@ -200,6 +274,41 @@ def main():
                                 subset=1.0, transform=preprocess, batch_size=args.batch_size)
         class_names = get_class_names(annotations_file)
 
+    elif args.dataset == "imagenet":
+        images_dir = "/DATA/cs22btech11053/Concept_Lora/sae-for-vlm/data/imagenet/"
+        annotations_file = "/DATA/cs22btech11053/Concept_Lora/Concept_LoRA/classes.txt"
+        ds, dl = get_dataloader("imagenet", images_dir, annotations_file,
+                                subset=1.0, transform=preprocess, batch_size=args.batch_size)
+        class_names = get_class_names(annotations_file)
+
+    elif args.dataset == "caltech101":
+        images_dir = "/DATA/cs22btech11053/Concept_Lora/Concept_LoRA/data/Caltech/"
+        transform = Compose([Resize((224, 224)), Lambda(lambda img: img.convert("RGB")), ToTensor()])
+        ds = Caltech101(root=images_dir, download=False, transform=transform)
+        # train_size = int(0.8 * len(full_dataset))
+        # val_size = int(0.2 * len(full_dataset))
+        # train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+        # train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+        # test_loader = DataLoader(val_dataset, batch_size=32, shuffle=False)
+        dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
+        class_dir = "/DATA/cs22btech11053/Concept_Lora/Concept_LoRA/data/Caltech/caltech101/101_ObjectCategories"
+        class_names = [name for name in os.listdir(class_dir) if os.path.isdir(os.path.join(class_dir, name))]
+
+    elif args.dataset == "OxfordIIITPet":
+        images_dir = "/DATA/cs22btech11053/Concept_Lora/Concept_LoRA/data/OxfordIIITPet"
+        transform = Compose([Resize((224, 224)), Lambda(lambda img: img.convert("RGB")), ToTensor()])
+        ds = OxfordIIITPet(root=images_dir, split="trainval", target_types="category",
+                           transform=transform, download=False)
+        dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False)
+        class_names = ds.classes
+
+    ys = []
+    for _, yb in dl:
+        ys.append(yb)
+    y = torch.cat(ys, dim=0)
+
+    print("Hi-1")
+
     # 3) Gather CLIP embeddings and standardize with saved stats
     X = collect_clip_embeddings(clip_model, dl, args.device)  # [N, D]
     assert X.shape[1] == in_dim, f"Embedding dim mismatch: {X.shape[1]} vs {in_dim}"
@@ -210,6 +319,43 @@ def main():
         Z, _ = sae(Xn.to(args.device))  # [N, H]
     Z = Z.detach().cpu()
     atoms = sae.decoder[0].weight.data.cpu()  # [D, H]
+
+    num_classes = len(class_names)
+
+    per_class_top10 = per_class_monosemanticity(
+        X, Z, y,
+        num_classes=num_classes,
+        k=10
+    )
+
+    print("Hi-2")
+
+    # Store the per-class top-10 monosemanticity scores in a CSV
+    csv_string = "per_class_top10_monosemanticity_{}_{}.csv".format(args.dataset, "fine" if args.bool_test else "norm")
+    csv_path = os.path.join(args.outdir, csv_string)
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["class_id", "class_name", "neuron_idx", "monosemanticity_score"])
+        for class_id, topk_list in per_class_top10.items():
+            class_name = class_names[class_id] if class_id < len(class_names) else f"Class {class_id}"
+            for neuron_idx, score in topk_list:
+                writer.writerow([class_id, class_name, neuron_idx, score])
+    print(f"Per-class top-10 monosemanticity scores saved to {csv_path}")
+
+    ms_all, dataset_avg = dataset_monosemanticity(X, Z)
+
+    top10_idx, top10_scores = topk_neurons_overall(ms_all, k=10)
+
+    print("Top-10 neurons (global):")
+    for i, s in zip(top10_idx.tolist(), top10_scores.tolist()):
+        print(f"Neuron {i:4d} | MS = {s:.4f}")
+
+    print("Hi-3")
+
+
+    mono_scores = weighted_pairwise_cosine(X, Z, pair_batch_size=100)
+    print("Mean monosemanticity scores per neuron:", mono_scores.mean().item())
+    exit(0)
 
     # 5) Per-neuron top-k image grids (+ optional b1)
     b1_cols = []

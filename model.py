@@ -42,10 +42,12 @@ def get_base_model(model_name, model_path=None, d_in=None):
     weights are loaded. Otherwise falls back to the default 'openai' pretrained weights.
     """
     # infer architecture from model_name (keep simple mapping for common case)
-    if "vit" in model_name.lower():
-        arch = "ViT-B-32"
-    else:
-        arch = model_name
+    # if "vit" in model_name.lower():
+    #     arch = "ViT-B-32"
+    # else:
+    #     arch = model_name
+
+    arch = model_name
 
     # if a custom path is supplied and exists, pass it to open_clip as pretrained
     if model_path and os.path.exists(model_path):

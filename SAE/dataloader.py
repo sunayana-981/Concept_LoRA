@@ -82,6 +82,12 @@ class CUBLoader(Dataset):
         return img, rec["class_label"]
 
 
+
+
+
+
+
+
 # =========================
 # Public factory
 # =========================
@@ -111,6 +117,12 @@ def get_dataloader(dataset_name,
 
     elif dataset_name == "cub":
         ds = CUBLoader(root=images_dir, split="train", transform=transform)
+
+    elif dataset_name == "imagenet":
+        ds = datasets.ImageFolder(
+        root=os.path.join(images_dir, "train"),
+        transform=transform
+        )
 
     else:
         raise ValueError(f"Unknown dataset: {dataset_name}")
