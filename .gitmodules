@@ -1,0 +1,3 @@
+[submodule "multimodal-prompt-learning"]
+	path = multimodal-prompt-learning
+	url = ./multimodal-prompt-learning/
