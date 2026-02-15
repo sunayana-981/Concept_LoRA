@@ -1,10 +1,10 @@
 from torch.utils.data import DataLoader, Dataset, TensorDataset
 from torch.optim import AdamW
 from torch.nn import utils
-from SAE.utils import collect_clip_embeddings, standardize
+from SAE_vanilla.utils import collect_clip_embeddings, standardize
 import torch
 import os
-from SAE.utils import get_optimizer, get_scheduler
+from SAE_vanilla.utils import get_optimizer, get_scheduler
 
 
 def train_sae(args, sae_model, train_loader, mean, std, device, epochs=10, lr=3e-4, l2_decay=1e-6):

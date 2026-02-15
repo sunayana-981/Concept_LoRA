@@ -13,7 +13,7 @@ from CLIP_LoRA.utils import set_random_seed            # only this (no get_argum
 from CLIP_LoRA.run_utils import inject_lora, mark_only_lora_as_trainable
 
 # ====================== SAE loader (robust) ======================
-from sparse_autoencoder import SparseAutoencoder
+from model import SparseAutoencoder
 
 def _strip_prefix(sd, prefixes=("module.", "autoencoder.")):
     out = {}
