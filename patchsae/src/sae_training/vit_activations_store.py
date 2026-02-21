@@ -67,14 +67,14 @@ class ViTActivationsStore:
 
     def _create_new_dataloader(self) -> DataLoader:
         """Create a new dataloader with fresh activations"""
-        activations = self._get_batch_activations()
+        activations = self.get_batch_activations()
         dataset = TensorDataset(activations)
         return iter(DataLoader(dataset, batch_size=self.batch_size, shuffle=True))
 
     def get_next_batch(self):
         """Get next batch, creating new dataloader if current one is exhausted"""
         try:
-            return self._get_batch_activations()
+            return self.get_batch_activations()
         except StopIteration:
             self.dataloader = self._create_new_dataloader()
             return next(self.dataloader)

@@ -36,7 +36,19 @@ DATASET_INFO = {
         "split": "train",
         "name": "with_background_category",
         "trust_remote_code": True,
-    }    
+    },
+    "eurosat": {
+        "path": "imagefolder",
+        "data_dir": "/home/sunayana/Documents/Concept_LoRA/data/eurosat/2750",
+        "split": "train",
+        "trust_remote_code": True,
+    },
+    "medmnist": {
+        "path": "imagefolder",
+        "data_dir": "/home/sunayana/Documents/Concept_LoRA/data/pathmnist_imagefolder",
+        "split": "train",
+        "trust_remote_code": True,
+    },
 }
 
 SAE_DIM = 49152
