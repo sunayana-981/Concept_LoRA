@@ -9,6 +9,13 @@ from transformers import CLIPProcessor, CLIPModel
 from collections import OrderedDict
 from tqdm import tqdm
 
+try:
+    import medmnist
+    from medmnist import INFO
+except ImportError:
+    print("medmnist not installed. Install with: pip install medmnist")
+
+
 # --- IMPORTS FROM YOUR PROJECT ---
 # This requires running from the project root so python can find 'tasks' and 'src'
 try:
@@ -75,6 +82,27 @@ def get_smart_dataset(root, transform):
     except:
         sys.stdout = sys.__stdout__
         return FlatFilenameDataset(root=root, transform=transform)
+    
+class MedMNISTSplit(Dataset):
+    """Wrapper to flatten labels from MedMNIST datasets and apply transforms."""
+    def __init__(self, dataset, transform=None):
+        self.dataset = dataset
+        self.transform = transform
+    
+    def __len__(self):
+        return len(self.dataset)
+    
+    def __getitem__(self, idx):
+        image, label = self.dataset[idx]
+        # Flatten label from [n] to scalar
+        if hasattr(label, '__len__'):
+            label = label.item() if hasattr(label, 'item') else label[0]
+        
+        # Apply transform if provided
+        if self.transform is not None:
+            image = self.transform(image)
+        
+        return image, int(label)
 
 # ==========================================
 # 3. Conversion Logic (OpenAI -> HF)
@@ -241,20 +269,50 @@ def evaluate_model(model, processor, dataloader, class_names, device, model_name
 # ==========================================
 if __name__ == "__main__":
     print("Initializing...")
+    dataset_type = "caltech101"
     
     # 1. Load Dataset
-    try:
-        transform = transforms.Compose([
+    dataset = None
+    dataloader = None
+    if dataset_type in ["oxfordpets", "caltech101"]:
+        if dataset_type == "caltech101":
+            DATASET_ROOT = "/home/harsha/ConceptLoRA/Concept_LoRA/data/caltech-101/Caltech101/101_ObjectCategories"
+            LOCAL_CHECKPOINT_PATH = "/home/harsha/ConceptLoRA/Concept_LoRA/multimodal-prompt-learning/caltech101/base/seed2/MultiModalPromptLearner/model.pth.tar-5"
+        try:
+            transform = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
+            ])
+            dataset = get_smart_dataset(DATASET_ROOT, transform)
+            dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+            print(f"Loaded {len(dataset.classes)} classes.")
+        except Exception as e:
+            print(f"Dataset Error: {e}")
+            sys.exit(1)
+    elif dataset_type == "medmnist":
+        LOCAL_CHECKPOINT_PATH = "/home/harsha/ConceptLoRA/Concept_LoRA/multimodal-prompt-learning/output/base2new/train_base/MedMNIST/shots_16/MaPLe/vit_b16_c2_ep5_batch4_2ctx/seed1/MultiModalPromptLearner/model.pth.tar-5"
+        try:
+            root_path = "/home/harsha/ConceptLoRA/Concept_LoRA/data/medmnist/"
+            eval_transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
-            transforms.Normalize((0.48145466, 0.4578275, 0.40821073), (0.26862954, 0.26130258, 0.27577711))
-        ])
-        dataset = get_smart_dataset(DATASET_ROOT, transform)
-        dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
-        print(f"Loaded {len(dataset.classes)} classes.")
-    except Exception as e:
-        print(f"Dataset Error: {e}")
-        sys.exit(1)
+            transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))
+            ])
+            train_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))
+            ])
+            DataClass = getattr(medmnist, INFO['pathmnist']['python_class'])
+            dataset = MedMNISTSplit(DataClass(split='train', download=True, root=root_path), transform=eval_transform)
+            dataset.classes = [INFO['pathmnist']['label'][str(i)] for i in range(len(INFO['pathmnist']['label']))]
+            dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+            print(f"MedMNIST Dataset loaded with {len(dataset.classes)} classes.")
+        except Exception as e:
+            print(f"MedMNIST Loading Error: {e}")
+            sys.exit(1)
 
     # 2. Load Models using Project Utils
     print("\nLoading SAE and ViT using 'get_sae_and_vit'...")
