@@ -45,6 +45,7 @@ lora_merged/
 *.bin
 *.npz
 *.npy
+*.txt
 
 *.tsv
 training/

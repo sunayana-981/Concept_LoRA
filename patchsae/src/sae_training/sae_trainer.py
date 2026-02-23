@@ -232,11 +232,17 @@ class SAETrainer:
     def run_evals(self):
         self.sae.eval()
 
+        # Detect if model is MaPLe (CustomCLIP) — it uses image_encoder
+        # instead of vision_model, requiring is_custom=True for hooks.
+        inner_model = self.model.model if hasattr(self.model, 'model') else self.model
+        is_maple = hasattr(inner_model, 'image_encoder') and not hasattr(inner_model, 'vision_model')
+
         def _create_hook(hook_fn):
             return Hook(
                 self.sae.cfg.block_layer,
                 self.sae.cfg.module_name,
                 hook_fn,
+                is_custom=is_maple,
                 return_module_output=False,
             )
 

@@ -1,4 +1,11 @@
 import argparse
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path so "src" and "tasks" packages resolve
+_project_root = str(Path(__file__).resolve().parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
 
 import torch
 import wandb
@@ -24,7 +31,7 @@ if __name__ == "__main__":
         "--model_name", type=str, default="openai/clip-vit-base-patch16"
     )
     parser.add_argument("--module_name", type=str, default="resid")
-    parser.add_argument("--block_layers", type=list, default=[-3])
+    parser.add_argument("--block_layers", type=int, nargs="+", default=[-3])
     parser.add_argument("--clip_dim", type=int, default=768)
 
     parser.add_argument("--dataset", type=str, default="imagenet")
@@ -91,7 +98,7 @@ if __name__ == "__main__":
             class_token=args.class_token,
             image_width=args.image_width,
             image_height=args.image_height,
-            model_name=f"openai/{args.model_name}",
+            model_name=args.model_name,
             module_name=args.module_name,
             block_layer=block_layer,
             dataset_path=DATASET_INFO[args.dataset]["path"],
@@ -151,7 +158,7 @@ if __name__ == "__main__":
             args.device,
             args.seed,
             vit,
-            args.block_layers,
+            block_layer,
             cfg.module_name,
             args.class_token,
         )
@@ -165,8 +172,9 @@ if __name__ == "__main__":
         sae.train()
 
         if cfg.log_to_wandb:
+            run_name = f"{args.run_name}_layer{block_layer}"
             wandb.init(project=cfg.wandb_project,
-                       config=cfg, name=cfg.run_name)
+                       config=cfg, name=run_name, reinit=True)
 
         sae_trainer = SAETrainer(
             sae, vit, activation_store, cfg, optimizer, scheduler, args.device

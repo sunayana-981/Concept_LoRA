@@ -39,11 +39,27 @@ class Hook:
 
     def get_full_hook_fn(self, hook_fn: Callable):
         def full_hook_fn(module, module_input, module_output):
-            hook_fn_output = hook_fn(module_output[0])
-            if self.return_module_output:
-                return module_output
+            # MaPLe ResidualAttentionBlock returns a list [x, prompts, counter];
+            # standard CLIP layers return a tuple (tensor,).
+            if isinstance(module_output, list):
+                hook_fn_output = hook_fn(module_output[0])
+                if self.return_module_output:
+                    return module_output
+                else:
+                    # Preserve the list structure so downstream layers
+                    # still receive [x, compound_prompts_deeper, counter]
+                    modified = list(module_output)
+                    if isinstance(hook_fn_output, tuple):
+                        modified[0] = hook_fn_output[0]
+                    else:
+                        modified[0] = hook_fn_output
+                    return modified
             else:
-                return hook_fn_output  # Inexplicably, the module output is not a tensor of activaitons but a tuple (tensor,)...??
+                hook_fn_output = hook_fn(module_output[0])
+                if self.return_module_output:
+                    return module_output
+                else:
+                    return hook_fn_output
 
         return full_hook_fn
 
@@ -135,6 +151,8 @@ class HookedVisionTransformer:
         if return_type == "output":
             return output
         if return_type == "loss":
+            if isinstance(output, torch.Tensor):
+                return torch.tensor(0.0, device=output.device)
             return self.contrastive_loss(
                 output.logits_per_image, output.logits_per_text
             )
@@ -151,6 +169,8 @@ class HookedVisionTransformer:
         if return_type == "output":
             return output
         if return_type == "loss":
+            if isinstance(output, torch.Tensor):
+                return torch.tensor(0.0, device=output.device)
             return self.contrastive_loss(
                 output.logits_per_image, output.logits_per_text
             )
@@ -214,6 +234,12 @@ class HookedVisionTransformer:
             return self.model(*args, **kwargs)
         elif return_type == "loss":
             output = self.model(*args, **kwargs)
+            # MaPLe's CustomCLIP returns a raw image_features tensor,
+            # not an object with logits_per_image / logits_per_text.
+            if isinstance(output, torch.Tensor):
+                # Cannot compute contrastive loss without text logits;
+                # return a dummy zero loss so training can continue.
+                return torch.tensor(0.0, device=output.device)
             return self.contrastive_loss(
                 output.logits_per_image, output.logits_per_text
             )

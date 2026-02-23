@@ -115,10 +115,9 @@ class PathMNISTTestDataset(Dataset):
         self.transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
-            transforms.Normalize(
-                (0.48145466, 0.4578275, 0.40821073),
-                (0.26862954, 0.26130258, 0.27577711),
-            ),
+            # NO Normalize — the CLIPProcessor in the eval loop handles it.
+            # Using Normalize here would cause double-normalisation via the
+            # lossy ToPILImage round-trip (clipping negative values).
         ])
 
     def __len__(self):

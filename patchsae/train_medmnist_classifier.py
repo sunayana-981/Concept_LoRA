@@ -125,14 +125,15 @@ def load_selected_saes(base_sae_path, medmnist_sae_paths, device, include_base=F
 
 
 def get_transform():
-    """CLIP ViT-B/16 standard preprocessing."""
+    """Minimal transform for images going through CLIPProcessor.
+
+    Only Resize + ToTensor (no Normalize).  The CLIPProcessor in the
+    extraction loop handles normalisation.  This avoids the
+    double-normalisation / PIL clipping bug.
+    """
     return transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
-        transforms.Normalize(
-            (0.48145466, 0.4578275, 0.40821073),
-            (0.26862954, 0.26130258, 0.27577711),
-        ),
     ])
 
 
