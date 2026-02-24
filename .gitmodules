@@ -1,3 +1,6 @@
 [submodule "multimodal-prompt-learning"]
 	path = multimodal-prompt-learning
-	url = ./multimodal-prompt-learning/
+	url = https://github.com/venkatadithya9/multimodal-prompt-learning
+[submodule "TAP"]
+	path = TAP
+	url = https://github.com/venkatadithya9/TAP
