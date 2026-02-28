@@ -274,9 +274,11 @@ class SAETrainer:
         ).item()
 
         # Calculate reconstruction score
-        reconstruction_score = (reconstruction_loss - original_loss) / (
-            zero_ablation_loss - original_loss
-        )
+        denominator = zero_ablation_loss - original_loss
+        if abs(denominator) < 1e-8:
+            reconstruction_score = 1.0 if abs(reconstruction_loss - original_loss) < 1e-8 else 0.0
+        else:
+            reconstruction_score = (reconstruction_loss - original_loss) / denominator
 
         # Log metrics if configured
         if self.cfg.log_to_wandb:
