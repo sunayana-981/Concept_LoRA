@@ -52,6 +52,14 @@ training/
 patchsae/diff_neuron_plots/
 concept_eval/
 
+# Model weights and datasets
+maple_weights/
+*.pth.tar-*
+*.zip
+
+# Large training logs
+patchsae/full_training_log.txt
+
 
 
 

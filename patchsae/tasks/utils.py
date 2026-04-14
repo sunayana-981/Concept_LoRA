@@ -49,6 +49,36 @@ DATASET_INFO = {
         "split": "train",
         "trust_remote_code": True,
     },
+    "dtd": {
+        "path": "imagefolder",
+        "data_dir": "/home/sunayana/Documents/Concept_LoRA/data/DTD/images",
+        "split": "train",
+        "trust_remote_code": True,
+    },
+    "ucf101": {
+        "path": "imagefolder",
+        "data_dir": "/home/sunayana/Documents/Concept_LoRA/data/UCF101/UCF-101-midframes",
+        "split": "train",
+        "trust_remote_code": True,
+    },
+    "cub2002011": {
+        "path": "imagefolder",
+        "data_dir": "/home/sunayana/Documents/Concept_LoRA/data/cub2002011/train",
+        "split": "train",
+        "trust_remote_code": True,
+    },
+    "oxford_pets": {
+        "path": "imagefolder",
+        "data_dir": "/home/sunayana/Documents/Concept_LoRA/data/oxford_pets_imagefolder",
+        "split": "train",
+        "trust_remote_code": True,
+    },
+    "fgvc": {
+        "path": "imagefolder",
+        "data_dir": "/home/sunayana/Documents/Concept_LoRA/data/fgvc_imagefolder",
+        "split": "train",
+        "trust_remote_code": True,
+    },
 }
 
 SAE_DIM = 49152
@@ -210,6 +240,32 @@ def get_sae_activations(model_activations: torch.Tensor, sae: SparseAutoencoder)
     if acts.ndim > 2:
         acts = acts.mean(dim=1)
     return acts
+
+
+def get_sae_latents(sae: SparseAutoencoder, activations: torch.Tensor) -> torch.Tensor:
+    """Extract sparse SAE latents from activations [B, seq, d_model]."""
+    # Preferred API on newer SAE implementations.
+    if hasattr(sae, "encode"):
+        return sae.encode(activations)
+
+    # Common forward signature: (reconstruction, latents, ...)
+    out = sae(activations)
+    if isinstance(out, tuple) and len(out) >= 2:
+        candidate = out[1]
+        if candidate.shape[-1] >= activations.shape[-1]:
+            return candidate
+
+    # Fallback for checkpoints exposing encoder weights directly.
+    if hasattr(sae, "W_enc") and hasattr(sae, "b_enc"):
+        x = activations
+        if hasattr(sae, "b_dec"):
+            x = x - sae.b_dec
+        z = x @ sae.W_enc + sae.b_enc
+        return torch.nn.functional.relu(z)
+
+    raise RuntimeError(
+        "Cannot extract SAE latents: no encode(), no forward latents, and no W_enc/b_enc."
+    )
 
 
 def process_batch(vit, batch_data, device):

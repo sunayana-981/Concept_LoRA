@@ -11,6 +11,7 @@ from src.sae_training.sparse_autoencoder import SparseAutoencoder
 from src.sae_training.utils import get_model_activations, process_model_inputs
 from tasks.utils import (
     DATASET_INFO,
+    detect_label_key,
     get_classnames,
     get_sae_activations,
     get_sae_and_vit,
@@ -24,7 +25,9 @@ def initialize_storage_tensors(
     """Initialize tensors for storing results."""
     return {
         "max_activating_image_values": torch.zeros([d_sae, num_max]).to(device),
-        "max_activating_image_indices": torch.zeros([d_sae, num_max]).to(device),
+        "max_activating_image_indices": torch.zeros(
+            [d_sae, num_max], dtype=torch.long, device=device
+        ),
         "sae_sparsity": torch.zeros([d_sae]).to(device),
         "sae_mean_acts": torch.zeros([d_sae]).to(device),
     }
@@ -163,9 +166,13 @@ def main(
 ):
     """Main function to extract and save feature data."""
     torch.set_float32_matmul_precision("high")
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
 
     dataset = load_dataset(**DATASET_INFO[dataset_name])
+    if isinstance(dataset, dict):
+        split = DATASET_INFO[dataset_name].get("split", "train")
+        dataset = dataset[split]
     dataset = dataset.shuffle(seed=seed)
     classnames = get_classnames(dataset_name, dataset)
 
@@ -197,20 +204,30 @@ def main(
             storage,
         )
 
-    # Finalize statistics
-    storage["sae_mean_acts"] /= storage["sae_sparsity"]
-    storage["sae_sparsity"] /= num_processed
+    # Finalize statistics.
+    # Avoid inf/nan for neurons that never fired.
+    fired_mask = storage["sae_sparsity"] > 0
+    storage["sae_mean_acts"][fired_mask] = (
+        storage["sae_mean_acts"][fired_mask] / storage["sae_sparsity"][fired_mask]
+    )
+    storage["sae_mean_acts"][~fired_mask] = 0
+    storage["sae_sparsity"] /= max(num_processed, 1)
 
     # Save results
     save_directory = setup_save_directory(
         root_dir, save_name, sae_path, vit_type, dataset_name
     )
+    try:
+        label_field = detect_label_key(dataset)
+    except ValueError:
+        label_field = None
     save_results(
         save_directory,
         storage,
         dataset,
-        label_field="label" if "label" in dataset.features else None,
+        label_field=label_field,
     )
+    return save_directory
 
 
 if __name__ == "__main__":

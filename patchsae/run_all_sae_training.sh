@@ -29,14 +29,24 @@ declare -A LORA_PATHS
 LORA_PATHS["eurosat"]="${LORA_WEIGHTS_ROOT}/eurosat/16shots/seed1/lora_weights.pt"
 LORA_PATHS["caltech101"]="${LORA_WEIGHTS_ROOT}/caltech101/16shots/seed1/lora_weights.pt"
 LORA_PATHS["medmnist"]="${LORA_WEIGHTS_ROOT}/medmnist/16shots/seed1/lora_weights.pt"
+LORA_PATHS["dtd"]="${LORA_WEIGHTS_ROOT}/dtd/16shots/seed42/lora_weights.pt"
+LORA_PATHS["ucf101"]="${LORA_WEIGHTS_ROOT}/ucf101/16shots/seed1/lora_weights.pt"
+LORA_PATHS["cub2002011"]="${LORA_WEIGHTS_ROOT}/cub2002011/16shots/seed1/lora_weights.pt"
+LORA_PATHS["oxford_pets"]="${LORA_WEIGHTS_ROOT}/oxford_pets/16shots/seed1/lora_weights.pt"
+LORA_PATHS["fgvc"]="${LORA_WEIGHTS_ROOT}/fgvc/16shots/seed1/lora_weights.pt"
 
 # --- Token budgets ---
 # EuroSAT converged at ~700K tokens. Using ~3x margin per dataset.
-# Smaller/similar datasets: 2M tokens. Larger (MedMNIST): 5M tokens.
+# Smaller/similar datasets: 2M tokens. Larger (MedMNIST, UCF101, CUB200): 5M tokens.
 declare -A TOTAL_TOKENS
 TOTAL_TOKENS["eurosat"]=2000000
 TOTAL_TOKENS["caltech101"]=2000000
 TOTAL_TOKENS["medmnist"]=2000000
+TOTAL_TOKENS["dtd"]=2000000
+TOTAL_TOKENS["ucf101"]=5000000
+TOTAL_TOKENS["cub2002011"]=5000000
+TOTAL_TOKENS["oxford_pets"]=2000000
+TOTAL_TOKENS["fgvc"]=2000000
 
 # --- Shared hyperparameters ---
 BLOCK_LAYERS="-2"
@@ -95,8 +105,13 @@ echo "Python: $(python3 --version 2>&1)"
 nvidia-smi --query-gpu=name,memory.free,temperature.gpu --format=csv,noheader 2>/dev/null || true
 echo ""
 
+# Set up imagefolder symlinks for OxfordPets and FGVC (idempotent)
+echo "[INFO] Setting up imagefolder datasets (OxfordPets, FGVC)..."
+python3 setup_imagefolder_datasets.py
+echo ""
+
 DATASETS_TO_TRAIN=()
-for dataset in medmnist; do
+for dataset in dtd ucf101 cub2002011 oxford_pets fgvc; do
     if check_lora_path "$dataset"; then
         DATASETS_TO_TRAIN+=("$dataset")
     fi

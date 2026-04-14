@@ -135,8 +135,10 @@ if __name__ == "__main__":
         )
 
         print("Loading dataset")
-        classnames = get_classnames(args.dataset)
         dataset = load_dataset(**DATASET_INFO[args.dataset])
+        if isinstance(dataset, dict):
+            dataset = dataset["train"]
+        classnames = get_classnames(args.dataset, dataset)
 
         print("Loading SAE and ViT models")
         sae = SparseAutoencoder(cfg, args.device)
