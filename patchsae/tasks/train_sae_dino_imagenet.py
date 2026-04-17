@@ -260,6 +260,14 @@ class DinoActivationsStore:
         pixel_values = self._get_batch_pixel_values()
         return self._extract_activations(pixel_values)
 
+    def get_batch_model_inputs(self, process_labels: bool = False) -> dict:
+        """Return {"pixel_values": tensor} — API-compatible with ViTActivationsStore.
+
+        DINOv2 is vision-only, so `process_labels` is ignored; no text
+        encoder exists to consume label strings.
+        """
+        return {"pixel_values": self._get_batch_pixel_values()}
+
     def initialize_b_dec(self, sae):
         """Delegate to the SAE's own method (uses get_next_batch internally)."""
         sae.initialize_b_dec(self)

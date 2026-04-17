@@ -237,6 +237,16 @@ class SAETrainer:
         inner_model = self.model.model if hasattr(self.model, 'model') else self.model
         is_maple = hasattr(inner_model, 'image_encoder') and not hasattr(inner_model, 'vision_model')
 
+        # DINO/DINOv2 models are vision-only — they have no text encoder and no
+        # contrastive loss.  run_with_hooks() is also CLIP-specific.  Detect this
+        # by checking whether the model supports contrastive-loss evaluation.
+        is_contrastive = hasattr(self.model, 'run_with_hooks') and hasattr(self.model, 'contrastive_loss')
+        if not is_contrastive:
+            print("[run_evals] Vision-only model detected (no contrastive loss). "
+                  "Skipping contrastive reconstruction score.")
+            self.sae.train()
+            return
+
         def _create_hook(hook_fn):
             return Hook(
                 self.sae.cfg.block_layer,
@@ -257,7 +267,6 @@ class SAETrainer:
             return (activations,)
 
         # Get model inputs and compute baseline loss
-        # model_inputs = self.activation_store.get_batch_of_images_and_labels()
         model_inputs = self.activation_store.get_batch_model_inputs(process_labels=True)
         original_loss = self.model(return_type="loss", **model_inputs).item()
 
