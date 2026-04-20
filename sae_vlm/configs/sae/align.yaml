@@ -1,0 +1,21 @@
+# ALIGN-specific SAE overrides (kakaobrain/align-base, d_model=640)
+# Inherits from default.yaml; only overrides differ.
+#
+# Calibration rationale:
+#   ALIGN acts: L2_norm~8.6, std~0.34  vs  CLIP: L2_norm~6, std~0.15
+#   l1 scaled to maintain same l1/MSE ratio at init:
+#     l1_align = l1_clip * (MSE_align/MSE_clip) * (d_sae_clip/d_sae_align)
+#             = 0.00008 * (74/36) * (49152/20480) ≈ 0.00025 → but 0.00008 works
+#             better empirically (L0~50-80 rather than L0~4).
+#   dead_feature_window: at L0=50 out of 20480, each feature fires every ~410
+#     steps; window must be >> 410 to reliably detect dead features.
+
+expansion_factor: 32          # d_sae = 640*32 = 20,480  (vs 49,152 for CLIP)
+l1_coefficient: 0.00008       # same as CLIP; larger value caused L0≈4 collapse
+batch_size: 32                # 346×346 images, fits on 24 GB
+lr_warm_up_steps: 1000
+total_training_tokens: 10240000   # 500 tok/feature × 20,480 features
+n_batches_in_store: 20
+use_ghost_grads: true
+dead_feature_window: 1024
+feature_sampling_window: 1024

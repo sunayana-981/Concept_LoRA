@@ -1,0 +1,11 @@
+model_id: kakaobrain/align-base
+family: align
+d_model: 640          # last block (blocks[54]) channel dim
+n_layers: 55          # total AlignVisionBlocks
+image_size: 346
+patch_size: null       # EfficientNet — no fixed patch size
+n_patches: 100        # 10x10 spatial positions at last block
+spatial_h: 10
+spatial_w: 10
+default_layer: -1     # blocks[54]
+processor_class: AlignProcessor

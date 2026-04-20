@@ -1,0 +1,92 @@
+# Central dataset registry.
+# hf_path: HuggingFace dataset id (used if local_path is absent or missing)
+# local_path: absolute path on disk (takes priority over hf_path)
+# split: which split to use for training SAE / running eval
+# label_key: column name for integer class label
+# hf_name: optional HuggingFace dataset config name
+
+imagenet:
+  hf_path: evanarlian/imagenet_1k_resized_256
+  split: train
+  label_key: label
+  trust_remote_code: true
+  n_classes: 1000
+  classnames_file: configs/classnames/imagenet_classnames.txt
+
+caltech101:
+  hf_path: HuggingFaceM4/Caltech-101
+  hf_name: with_background_category
+  split: train
+  label_key: label
+  trust_remote_code: true
+  n_classes: 102
+  classnames_file: configs/classnames/caltech101_classnames.txt
+
+cub2002011:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/cub2002011/train
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 200
+
+dtd:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/DTD/images
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 47
+
+eurosat:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/eurosat/2750
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 10
+  classnames_file: configs/classnames/eurosat_classnames.txt
+
+fgvc:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/fgvc_imagefolder
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 100
+
+food101:
+  hf_path: food101
+  split: train
+  label_key: label
+  n_classes: 101
+
+medmnist:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/pathmnist_imagefolder
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 9
+
+oxford_flowers:
+  hf_path: nelorth/oxford-flowers
+  split: train
+  label_key: label
+  n_classes: 102
+
+oxford_pets:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/oxford_pets_imagefolder
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 37
+
+ucf101:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/UCF101/UCF-101-midframes
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 101
+
+imagenet_sketch:
+  hf_path: clip-benchmark/wds_imagenet_sketch
+  split: test
+  label_key: cls
+  trust_remote_code: true
+  n_classes: 1000

@@ -1,0 +1,11 @@
+model_id: facebook/dinov2-base
+family: dinov2
+d_model: 768
+n_layers: 12
+image_size: 224
+patch_size: 14
+n_patches: 256        # 16x16
+n_tokens: 257         # 256 patches + 1 CLS
+cls_token_idx: 0
+default_layer: -1
+processor_class: AutoImageProcessor

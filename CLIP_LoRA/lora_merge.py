@@ -41,6 +41,7 @@ def inspect_lora_structure(layers):
         for k in list(sample_layer.keys())[:5]:
             val = sample_layer[k]
             info = val.shape if torch.is_tensor(val) else type(val)
+            
             print(f"  {k}: {info}")
 
 def apply_lora_to_block(block, lora_dict, scale, layer_idx, encoder_type):
