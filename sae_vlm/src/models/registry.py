@@ -10,9 +10,10 @@ from .base import BackboneBase
 _MODELS_CFG_DIR = Path(__file__).resolve().parents[2] / "configs" / "models"
 
 _FAMILY_TO_CLASS = {
-    "clip":   "CLIPBackbone",
-    "dinov2": "DINOv2Backbone",
-    "align":  "ALIGNBackbone",
+    "clip":    "CLIPBackbone",
+    "clipood": "CLIPoodBackbone",
+    "dinov2":  "DINOv2Backbone",
+    "align":   "ALIGNBackbone",
 }
 
 
@@ -41,6 +42,8 @@ def get_backbone(name_or_path: str, device: str = "cuda") -> BackboneBase:
     # Lazy import to avoid circular deps
     if cls_name == "CLIPBackbone":
         from .clip_backbone import CLIPBackbone as Cls
+    elif cls_name == "CLIPoodBackbone":
+        from .clipood_backbone import CLIPoodBackbone as Cls
     elif cls_name == "DINOv2Backbone":
         from .dinov2_backbone import DINOv2Backbone as Cls
     elif cls_name == "ALIGNBackbone":

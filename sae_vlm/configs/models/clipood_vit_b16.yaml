@@ -1,0 +1,14 @@
+model_id: openai/clip-vit-base-patch16
+family: clipood
+d_model: 768
+n_layers: 12
+image_size: 224
+patch_size: 16
+n_patches: 196
+n_tokens: 197
+cls_token_idx: 0
+default_layer: -2
+processor_class: CLIPProcessor
+# Optional: path to CLIPood fine-tuned state dict.
+# Overridden at runtime by --clipood_checkpoint in train_sae.py.
+clipood_checkpoint_path: null

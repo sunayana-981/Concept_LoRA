@@ -179,6 +179,9 @@ def main():
     parser.add_argument("--dry_run",         action="store_true",
                         help="Load everything but skip training")
     parser.add_argument("--skip_verify",     action="store_true")
+    parser.add_argument("--clipood_checkpoint", default=None,
+                        help="Path to CLIPood fine-tuned state dict (.pt). "
+                             "Requires --model clipood_vit_b16.")
 
     args = parser.parse_args()
 
@@ -223,7 +226,11 @@ def main():
 
     # ── Load backbone ─────────────────────────────────────────────────────────
     print(f"[INFO] Loading backbone '{args.model}'...")
-    backbone = get_backbone(args.model, device=device).load()
+    backbone = get_backbone(args.model, device=device)
+    if args.clipood_checkpoint:
+        # Inject AFTER get_backbone() so we override the fresh YAML-loaded cfg
+        backbone.model_cfg["clipood_checkpoint_path"] = args.clipood_checkpoint
+    backbone = backbone.load()
     print(f"[INFO] Backbone loaded: {model_cfg['model_id']}")
 
     # ── Train one SAE per layer ───────────────────────────────────────────────

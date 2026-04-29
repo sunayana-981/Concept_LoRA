@@ -1,0 +1,7 @@
+dataset,md_mean
+caltech101,34.04
+dtd,55.28
+ucf101,66.71
+cub2002011,88.34
+eurosat,108.58
+medmnist,113.87

@@ -84,6 +84,43 @@ ucf101:
   label_key: label
   n_classes: 101
 
+# ── PACS (leave-one-out splits for CLIPood / DG experiments) ──────────────────
+# Run tasks/setup_pacs_imagefolder.py --pacs_root /path/to/PACS first to create
+# the merged ImageFolder dirs that these local_path entries point to.
+# PACS root should contain: art_painting/ cartoon/ photo/ sketch/
+
+pacs_no_photo:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/pacs_imagefolder/no_photo
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 7
+  classnames_file: configs/classnames/pacs_classnames.txt
+
+pacs_no_art:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/pacs_imagefolder/no_art_painting
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 7
+  classnames_file: configs/classnames/pacs_classnames.txt
+
+pacs_no_cartoon:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/pacs_imagefolder/no_cartoon
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 7
+  classnames_file: configs/classnames/pacs_classnames.txt
+
+pacs_no_sketch:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/pacs_imagefolder/no_sketch
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 7
+  classnames_file: configs/classnames/pacs_classnames.txt
+
 imagenet_sketch:
   hf_path: clip-benchmark/wds_imagenet_sketch
   split: test

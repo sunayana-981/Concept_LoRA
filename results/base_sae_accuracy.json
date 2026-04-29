@@ -1,0 +1,90 @@
+[
+  {
+    "dataset": "eurosat",
+    "backbone": "ViT-B/16",
+    "ZS": 42.8519,
+    "LoRA-FT": 76.0778,
+    "ZS + BaseSAE-1": 42.5222,
+    "LoRA-FT + BaseSAE-1": 75.963,
+    "sae_recon_cos_sim_zs": 0.999777,
+    "sae_recon_cos_sim_lora": 0.99971,
+    "sae_l0": 575.8
+  },
+  {
+    "dataset": "caltech101",
+    "backbone": "ViT-B/16",
+    "ZS": 85.8131,
+    "LoRA-FT": 91.9903,
+    "ZS + BaseSAE-1": 85.8361,
+    "LoRA-FT + BaseSAE-1": 91.9673,
+    "sae_recon_cos_sim_zs": 0.999825,
+    "sae_recon_cos_sim_lora": 0.999807,
+    "sae_l0": 580.9
+  },
+  {
+    "dataset": "medmnist",
+    "backbone": "ViT-B/16",
+    "ZS": 18.9276,
+    "LoRA-FT": 90.5153,
+    "ZS + BaseSAE-1": 19.0529,
+    "LoRA-FT + BaseSAE-1": 90.5989,
+    "sae_recon_cos_sim_zs": 0.999768,
+    "sae_recon_cos_sim_lora": 0.999684,
+    "sae_l0": 575.0
+  },
+  {
+    "dataset": "cub2002011",
+    "backbone": "ViT-B/16",
+    "ZS": 47.3421,
+    "LoRA-FT": 63.583,
+    "ZS + BaseSAE-1": 47.2903,
+    "LoRA-FT + BaseSAE-1": 63.4449,
+    "sae_recon_cos_sim_zs": 0.999826,
+    "sae_recon_cos_sim_lora": 0.999617,
+    "sae_l0": 579.6
+  },
+  {
+    "dataset": "dtd",
+    "backbone": "ViT-B/16",
+    "ZS": 44.4149,
+    "LoRA-FT": 72.0922,
+    "ZS + BaseSAE-1": 44.3794,
+    "LoRA-FT + BaseSAE-1": 72.1631,
+    "sae_recon_cos_sim_zs": 0.999831,
+    "sae_recon_cos_sim_lora": 0.999726,
+    "sae_l0": 578.2
+  },
+  {
+    "dataset": "ucf101",
+    "backbone": "ViT-B/16",
+    "ZS": 65.6982,
+    "LoRA-FT": 80.5631,
+    "ZS + BaseSAE-1": 65.6982,
+    "LoRA-FT + BaseSAE-1": 80.6456,
+    "sae_recon_cos_sim_zs": 0.999798,
+    "sae_recon_cos_sim_lora": 0.999761,
+    "sae_l0": 581.4
+  },
+  {
+    "dataset": "fgvc",
+    "backbone": "ViT-B/16",
+    "ZS": 23.9688,
+    "LoRA-FT": 49.6175,
+    "ZS + BaseSAE-1": 24.1188,
+    "LoRA-FT + BaseSAE-1": 49.4675,
+    "sae_recon_cos_sim_zs": 0.999806,
+    "sae_recon_cos_sim_lora": 0.999755,
+    "sae_l0": 582.6
+  },
+  {
+    "dataset": "oxford_pets",
+    "backbone": "ViT-B/16",
+    "ZS": 84.8913,
+    "LoRA-FT": 93.9674,
+    "ZS + BaseSAE-1": 84.9457,
+    "LoRA-FT + BaseSAE-1": 93.913,
+    "sae_recon_cos_sim_zs": 0.999848,
+    "sae_recon_cos_sim_lora": 0.999787,
+    "sae_l0": 578.3
+  }
+]

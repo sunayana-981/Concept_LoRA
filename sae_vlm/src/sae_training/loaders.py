@@ -20,8 +20,14 @@ def load_sae(path: str, device: str = "cuda"):
 
     Returns (sae, cfg).
     """
+    from types import SimpleNamespace
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
-    cfg  = ckpt["cfg"]
+    cfg  = ckpt.get("cfg", ckpt.get("config"))  # older checkpoints use 'config'
+    if cfg is None:
+        raise KeyError(f"SAE checkpoint at {path} has neither 'cfg' nor 'config' key")
+    # Older checkpoints store cfg as a plain dict; wrap so attribute access works.
+    if isinstance(cfg, dict):
+        cfg = SimpleNamespace(**cfg)
     sae  = SparseAutoencoder(cfg, device)
     sae.load_state_dict(ckpt["state_dict"])
     sae.eval().to(device)
@@ -159,7 +165,7 @@ def _apply_clip_lora_deltas(
                 continue
 
             delta = scale * (B.float() @ A.float())
-            state_dict[param_key] = state_dict[param_key] + delta
+            state_dict[param_key] = state_dict[param_key] + delta.to(state_dict[param_key].device)
 
     vit.model.load_state_dict(state_dict, strict=False)
     vit.model.to(device)

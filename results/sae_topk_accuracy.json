@@ -1,0 +1,194 @@
+[
+  {
+    "dataset": "eurosat",
+    "backbone": "ViT-B/16",
+    "ZS": 42.8519,
+    "LoRA-FT": 76.0778,
+    "zs_to_lora_cos_sim": 0.6919,
+    "topk_results": [
+      {
+        "k": 580,
+        "ZS+SAE": 42.5185,
+        "LoRA+SAE": 75.9593,
+        "delta_ZS": -0.3333,
+        "delta_LoRA": -0.1185,
+        "cos_sim_zs": 0.999777,
+        "cos_sim_lora": 0.999709,
+        "l0_zs": 574.9,
+        "l0_lora": 579.3
+      },
+      {
+        "k": 256,
+        "ZS+SAE": 41.1444,
+        "LoRA+SAE": 75.8444,
+        "delta_ZS": -1.7074,
+        "delta_LoRA": -0.2333,
+        "cos_sim_zs": 0.992353,
+        "cos_sim_lora": 0.980965,
+        "l0_zs": 256.0,
+        "l0_lora": 256.0
+      },
+      {
+        "k": 128,
+        "ZS+SAE": 38.9778,
+        "LoRA+SAE": 74.5556,
+        "delta_ZS": -3.8741,
+        "delta_LoRA": -1.5222,
+        "cos_sim_zs": 0.972642,
+        "cos_sim_lora": 0.934296,
+        "l0_zs": 128.0,
+        "l0_lora": 128.0
+      },
+      {
+        "k": 64,
+        "ZS+SAE": 35.937,
+        "LoRA+SAE": 71.1185,
+        "delta_ZS": -6.9148,
+        "delta_LoRA": -4.9593,
+        "cos_sim_zs": 0.946487,
+        "cos_sim_lora": 0.873468,
+        "l0_zs": 64.0,
+        "l0_lora": 64.0
+      },
+      {
+        "k": 32,
+        "ZS+SAE": 32.7296,
+        "LoRA+SAE": 66.1741,
+        "delta_ZS": -10.1222,
+        "delta_LoRA": -9.9037,
+        "cos_sim_zs": 0.918291,
+        "cos_sim_lora": 0.81092,
+        "l0_zs": 32.0,
+        "l0_lora": 32.0
+      }
+    ]
+  },
+  {
+    "dataset": "medmnist",
+    "backbone": "ViT-B/16",
+    "ZS": 18.9276,
+    "LoRA-FT": 90.5153,
+    "zs_to_lora_cos_sim": 0.7495,
+    "topk_results": [
+      {
+        "k": 580,
+        "ZS+SAE": 19.0529,
+        "LoRA+SAE": 90.5989,
+        "delta_ZS": 0.1253,
+        "delta_LoRA": 0.0836,
+        "cos_sim_zs": 0.999768,
+        "cos_sim_lora": 0.999682,
+        "l0_zs": 574.3,
+        "l0_lora": 579.0
+      },
+      {
+        "k": 256,
+        "ZS+SAE": 19.039,
+        "LoRA+SAE": 89.8468,
+        "delta_ZS": 0.1114,
+        "delta_LoRA": -0.6685,
+        "cos_sim_zs": 0.993841,
+        "cos_sim_lora": 0.980196,
+        "l0_zs": 256.0,
+        "l0_lora": 256.0
+      },
+      {
+        "k": 128,
+        "ZS+SAE": 19.4568,
+        "LoRA+SAE": 88.6212,
+        "delta_ZS": 0.5292,
+        "delta_LoRA": -1.8942,
+        "cos_sim_zs": 0.979516,
+        "cos_sim_lora": 0.932593,
+        "l0_zs": 128.0,
+        "l0_lora": 128.0
+      },
+      {
+        "k": 64,
+        "ZS+SAE": 18.2173,
+        "LoRA+SAE": 83.2869,
+        "delta_ZS": -0.7103,
+        "delta_LoRA": -7.2284,
+        "cos_sim_zs": 0.961755,
+        "cos_sim_lora": 0.872222,
+        "l0_zs": 64.0,
+        "l0_lora": 64.0
+      },
+      {
+        "k": 32,
+        "ZS+SAE": 15.8914,
+        "LoRA+SAE": 53.9972,
+        "delta_ZS": -3.0362,
+        "delta_LoRA": -36.5181,
+        "cos_sim_zs": 0.943402,
+        "cos_sim_lora": 0.813023,
+        "l0_zs": 32.0,
+        "l0_lora": 32.0
+      }
+    ]
+  },
+  {
+    "dataset": "cub2002011",
+    "backbone": "ViT-B/16",
+    "ZS": 47.3421,
+    "LoRA-FT": 63.583,
+    "zs_to_lora_cos_sim": 0.7218,
+    "topk_results": [
+      {
+        "k": 580,
+        "ZS+SAE": 47.3076,
+        "LoRA+SAE": 63.4449,
+        "delta_ZS": -0.0345,
+        "delta_LoRA": -0.1381,
+        "cos_sim_zs": 0.999826,
+        "cos_sim_lora": 0.999614,
+        "l0_zs": 577.5,
+        "l0_lora": 579.7
+      },
+      {
+        "k": 256,
+        "ZS+SAE": 46.5482,
+        "LoRA+SAE": 62.3749,
+        "delta_ZS": -0.7939,
+        "delta_LoRA": -1.2081,
+        "cos_sim_zs": 0.991894,
+        "cos_sim_lora": 0.969006,
+        "l0_zs": 256.0,
+        "l0_lora": 256.0
+      },
+      {
+        "k": 128,
+        "ZS+SAE": 45.2019,
+        "LoRA+SAE": 58.4398,
+        "delta_ZS": -2.1401,
+        "delta_LoRA": -5.1432,
+        "cos_sim_zs": 0.970908,
+        "cos_sim_lora": 0.891144,
+        "l0_zs": 128.0,
+        "l0_lora": 128.0
+      },
+      {
+        "k": 64,
+        "ZS+SAE": 42.5613,
+        "LoRA+SAE": 52.6234,
+        "delta_ZS": -4.7808,
+        "delta_LoRA": -10.9596,
+        "cos_sim_zs": 0.940509,
+        "cos_sim_lora": 0.792244,
+        "l0_zs": 64.0,
+        "l0_lora": 64.0
+      },
+      {
+        "k": 32,
+        "ZS+SAE": 36.5723,
+        "LoRA+SAE": 43.0963,
+        "delta_ZS": -10.7698,
+        "delta_LoRA": -20.4867,
+        "cos_sim_zs": 0.903581,
+        "cos_sim_lora": 0.692793,
+        "l0_zs": 32.0,
+        "l0_lora": 32.0
+      }
+    ]
+  }
+]

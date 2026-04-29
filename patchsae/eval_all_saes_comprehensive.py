@@ -137,13 +137,13 @@ DATASET_CONFIG = {
     },
     "fgvc": {
         "lora_ckpt":   f"{_LORA_ROOT}/fgvc/16shots/seed1/lora_weights.pt",
-        "loader_type": "imagefolder",
-        "data_path":   f"{_DATA_ROOT}/fgvc_imagefolder/train",
+        "loader_type": "fgvc_aircraft",
+        "data_path":   f"{_DATA_ROOT}/fgvc-aircraft-2013b",
     },
     "oxford_pets": {
         "lora_ckpt":   f"{_LORA_ROOT}/oxford_pets/16shots/seed1/lora_weights.pt",
         "loader_type": "imagefolder",
-        "data_path":   f"{_DATA_ROOT}/OxfordPets",
+        "data_path":   f"{_DATA_ROOT}/OxfordPets/images",   # images/ subdir
         "split_json":  f"{_DATA_ROOT}/OxfordPets/split_zhou_OxfordPets.json",
     },
     # fallback for 'unknown' dataset SAEs — use medmnist
@@ -388,9 +388,16 @@ class SplitJsonDataset(Dataset):
             classname = it[2] if len(it) >= 3 else it[1]
             if classname in exclude:
                 continue
-            full_path = os.path.join(img_root, rel_path)
-            if os.path.isfile(full_path):
-                self.samples.append((full_path, self.class_to_idx[classname]))
+            # Try direct path first, then common image subdirectories
+            found = False
+            for prefix in ["", "images/"]:
+                full_path = os.path.join(img_root, prefix + rel_path)
+                if os.path.isfile(full_path):
+                    self.samples.append((full_path, self.class_to_idx[classname]))
+                    found = True
+                    break
+            if not found:
+                pass  # skip missing files silently
         self.transform = transform
 
     def __len__(self):
@@ -404,6 +411,58 @@ class SplitJsonDataset(Dataset):
         return img, label
 
 
+def _build_fgvc_loaders(data_root: str, batch_size: int, lora_preprocess=None):
+    """FGVC-Aircraft test split from images_variant_test.txt."""
+    test_txt  = os.path.join(data_root, "data", "images_variant_test.txt")
+    img_dir   = os.path.join(data_root, "data", "images")
+    if not os.path.isfile(test_txt):
+        # fallback: try root-level
+        test_txt = os.path.join(data_root, "images_variant_test.txt")
+        img_dir  = os.path.join(data_root, "images")
+
+    samples, classes = [], []
+    class_to_idx = {}
+    if os.path.isfile(test_txt):
+        with open(test_txt) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(" ", 1)
+                img_id, variant = parts[0], parts[1] if len(parts) > 1 else "unknown"
+                variant = variant.strip()
+                if variant not in class_to_idx:
+                    class_to_idx[variant] = len(class_to_idx)
+                    classes.append(variant)
+                img_path = os.path.join(img_dir, img_id + ".jpg")
+                if os.path.isfile(img_path):
+                    samples.append((img_path, class_to_idx[variant]))
+
+    pil_transform = transforms.Resize((224, 224))
+
+    class _FGVCDataset(Dataset):
+        def __init__(self, transform):
+            self.transform = transform
+        def __len__(self): return len(samples)
+        def __getitem__(self, i):
+            path, label = samples[i]
+            img = Image.open(path).convert("RGB")
+            if self.transform: img = self.transform(img)
+            return img, label
+
+    def _pil_collate(batch):
+        imgs, labels = zip(*batch)
+        return list(imgs), torch.tensor(labels)
+
+    hf_loader = DataLoader(_FGVCDataset(pil_transform), batch_size=batch_size,
+                           shuffle=False, num_workers=2, collate_fn=_pil_collate)
+    oai_loader = None
+    if lora_preprocess is not None:
+        oai_loader = DataLoader(_FGVCDataset(lora_preprocess), batch_size=batch_size,
+                                shuffle=False, num_workers=2, pin_memory=True)
+    return hf_loader, oai_loader, classes
+
+
 def build_dataset_loaders(dataset_name: str, batch_size: int, lora_preprocess=None):
     """Build HF and OAI loaders for any supported dataset. Returns (hf_loader, oai_loader, classnames)."""
     cfg = DATASET_CONFIG.get(dataset_name, DATASET_CONFIG["unknown"])
@@ -412,6 +471,9 @@ def build_dataset_loaders(dataset_name: str, batch_size: int, lora_preprocess=No
 
     if loader_type == "npz":
         return build_medmnist_loaders(batch_size, lora_preprocess)
+
+    if loader_type == "fgvc_aircraft":
+        return _build_fgvc_loaders(data_path, batch_size, lora_preprocess)
 
     # ImageFolder or split-json based
     pil_transform  = transforms.Resize((224, 224))
@@ -843,6 +905,14 @@ def evaluate_one_sae(sae_info, vit_base, lora_cache, args):
     sae_type = getattr(cfg, "sae_type", "standard")
     print(f"  d_in={sae.d_in}, d_sae={sae.d_sae}, layer={cfg.block_layer}, "
           f"module={getattr(cfg,'module_name','?')}, type={sae_type}")
+
+    # Skip SAEs trained on non-CLIP backbones (ALIGN uses d_in=640, DINOv2 uses 768 but different arch)
+    model_name = getattr(cfg, "model_name", "") or ""
+    if sae.d_in != 768 or "align" in model_name.lower():
+        print(f"  [SKIP] Non-CLIP backbone (d_in={sae.d_in}, model={model_name}) — skipping eval")
+        result["skipped"] = f"non-CLIP backbone d_in={sae.d_in}"
+        del sae; flush()
+        return result
 
     # ── Backbone A: Base HF CLIP ──────────────────────────────────
     print(f"\n  [BASE-DOMAIN] Capturing via HF base CLIP on {dataset}...")

@@ -223,6 +223,9 @@ def main():
     # Output / misc
     parser.add_argument("--out_root",   default="out")
     parser.add_argument("--device",     default="cuda")
+    parser.add_argument("--clipood_checkpoint", default=None,
+                        help="Path to CLIPood fine-tuned state dict (.pt). "
+                             "Requires --model clipood_vit_b16.")
 
     args = parser.parse_args()
 
@@ -246,7 +249,10 @@ def main():
     # ── Load backbone A ───────────────────────────────────────────────────────
     if not args.replot:
         print(f"[INFO] Loading backbone '{args.model}'...")
-        backbone = get_backbone(args.model, device=device).load()
+        backbone = get_backbone(args.model, device=device)
+        if args.clipood_checkpoint:
+            backbone.model_cfg["clipood_checkpoint_path"] = args.clipood_checkpoint
+        backbone = backbone.load()
 
     # ── Load backbone B (for compare task) ───────────────────────────────────
     backbone_b = None
