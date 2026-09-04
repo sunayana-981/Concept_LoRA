@@ -68,13 +68,13 @@ RSYNC_ARGS=(-a
     --exclude '*.out' --exclude '*.synctex.gz' --exclude '*.log'
     --exclude '*.fls' --exclude '*.fdb_latexmk'
     --exclude '*.zip'
-    --exclude '*.pdf'
+    # Anchored to the repo root on purpose: figures/*.pdf are real content
+    # (vector plots), and a blanket '*.pdf' would silently drop all seven of
+    # them along with the compiled document.
+    --exclude '/neurips_2026.pdf'
     --exclude 'sec/old4_method.tex'
     --exclude 'sync_overleaf.sh'
 )
-# Figure PDFs are real content, not build output -- re-include them after the
-# blanket *.pdf exclusion above drops the compiled document.
-RSYNC_ARGS+=(--include 'figures/***')
 
 if [ "$PRUNE" -eq 1 ]; then
     echo "==> --prune given: files on Overleaf but not in Arxiv-version/ will be DELETED"
@@ -102,7 +102,11 @@ fixes for the unclosed \\todo in the intro, the xcolor option clash, and
 44 duplicate bib entries. Builds clean at 37 pages."
 
 echo "==> Pushing to Overleaf"
-if git push origin master 2>/dev/null || git push origin HEAD; then
+# Overleaf projects vary between master and main depending on when they were
+# created, so push whatever branch the clone actually put us on.
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+echo "    branch: $BRANCH"
+if git push origin "$BRANCH"; then
     echo ""
     echo "Synced. Open https://www.overleaf.com/project/${PROJECT_ID} to recompile."
 else
