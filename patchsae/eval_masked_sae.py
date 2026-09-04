@@ -198,7 +198,10 @@ def load_masked_sae(path, device):
     from src.sae_training.config import Config
     from src.sae_training.sparse_autoencoder import SparseAutoencoder
 
-    ckpt = torch.load(path, map_location="cpu")
+    try:
+        ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:  # PyTorch versions predating the weights_only argument.
+        ckpt = torch.load(path, map_location="cpu")
     cfg = Config(ckpt.get("cfg", ckpt.get("config")))
     sae = SparseAutoencoder(cfg, device)
     sae.load_state_dict(ckpt["state_dict"])

@@ -1,0 +1,2 @@
+model,method,dataset,shots,seed,backbone,encoder,position,r,alpha,baseline_type,zs_acc,lp_acc,ft_acc,adapter_delta
+clip,lora,cityscapes,16,1,ViT-B/16,both,all,4,1.0,zero_shot,2.2000,,10.2000,8.0000

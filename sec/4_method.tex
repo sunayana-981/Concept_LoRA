@@ -1,0 +1,100 @@
+
+
+\paragraph{Goal.}
+We ask a mechanistic question: when a vision--language model $L$ is adapted
+to a shifted image distribution via an adapter $A$ to produce $\hat{L}$, does
+the feature basis learned by a sparse autoencoder $S_L$ on the base model
+remain a faithful decomposition of $\hat{L}$'s activations, or must the SAE
+itself be re-trained on the adapted model to recover interpretability?
+Rather than judging adaptation purely by downstream accuracy, we treat the
+encoder's intermediate activations as a representation space and measure
+whether the pre-adaptation dictionary continues to describe what the model
+computes after adaptation.
+
+\subsection{Problem: what does adaptation do to the SAE basis?}
+\label{sec:method-problem}
+
+Let $L$ denote the frozen visual encoder of a VLM, mapping an image
+$x \in \mathbb{R}^{H \times W \times 3}$ to patch-token representations
+$H^{\ell}(x) \in \mathbb{R}^{N \times d}$ at hook layer $\ell$. Let $A$
+denote an adapter (LoRA, MaPLe, or TAP) that produces the adapted encoder
+$\hat{L}$. We use $S_L$ to denote an SAE trained on activations from $L$
+and $S_{\hat{L}}$ an SAE trained on activations from $\hat{L}$. For an
+image $I$, the adapted model produces $\hat{L}(I)$; we then have two
+possible sparse decompositions: $S_L(\hat{L}(I))$, which reuses the base
+dictionary, and $S_{\hat{L}}(\hat{L}(I))$, which uses the adapted dictionary.
+
+The central question is whether $S_L$ and $S_{\hat{L}}$ agree. If adaptation
+merely reweights existing base features (as prompt-tuning work has argued
+for near-domain benchmarks), then $S_L \approx S_{\hat{L}}$ and base-SAE
+explanations transfer. If adaptation induces new representational structure,
+then $S_L(\hat{L}(I))$ will degrade---in reconstruction fidelity, sparsity,
+and concept purity---and interpretability claims drawn from $S_L$ will not
+carry over to $\hat{L}$. Our method instantiates this comparison and
+quantifies the gap.
+
+\begin{itemize}
+    \item \textbf{SAEs have become the de facto tool for mechanistic interpretability of LLMs and vision foundation models} \cite{bricken2023monosemanticity, cunningham2024sparse, templeton2024scaling, gao2024scaling, lieberum2024gemma}.
+
+    \item \textbf{All existing pipelines follow the same recipe:} train the SAE once on a large, generic, pretraining-like corpus, freeze it, and reuse it for every downstream task. Representative scales: 8B tokens \cite{bricken2023monosemanticity}, 40B tokens on GPT-4 \cite{gao2024scaling}, and the full Gemma-2 pretraining mix \cite{lieberum2024gemma}. This pattern persists even when the underlying model is adapted via LoRA or other parameter-efficient finetuning: the frozen base-model SAE is typically reused without retraining \cite{kissane2024saes, kharlapenko2024transfer}.
+
+    \item \textbf{This implicitly assumes that deployment activations stay close to training activations}, an assumption inherited from the train-once-freeze-forever pattern and rarely stated.
+
+    \item \textbf{This assumption fails in common deployment regimes.} Activation distributions shift across base $\rightarrow$ instruct/chat finetuning \cite{kissane2024saes, li2025fast}, base $\rightarrow$ domain-specialized finetunes \cite{kharlapenko2024transfer}, pretraining $\rightarrow$ narrow downstream tasks \cite{smith2025negative}, and compositional or OOD concept co-occurrence \cite{menon2026stopprobing}.
+
+    \item \textbf{Empirically, the recipe breaks on exactly these shifts.} On OOD harmful-intent probing, SAE features underperform linear probes on the residual stream, and finetuning the SAE on chat data closes only about half the gap \cite{smith2025negative}. Across data scarcity, class imbalance, label noise, and covariate shift, SAEs show no consistent advantage over simple linear baselines \cite{kantamneni2025sparse}. Under OOD compositional shift, the amortization gap widens and the failure localizes to the learned dictionary itself rather than the inference procedure \cite{menon2026stopprobing}. Independent work frames these findings as evidence that current SAEs produce brittle representations under distribution shift \cite{narayanaswamy2026masked}.
+
+    \item \textbf{Diagnosis:} the failure is structural. A frozen SAE encodes training-time co-occurrence statistics as fixed directions; once the activation distribution shifts, those directions are neither necessary nor sufficient for the deployment domain. A one-shot, pretrain-and-freeze SAE is a model of the training corpus, not of the network.
+\end{itemize}
+
+\paragraph{From observations to hypotheses.}
+If the dictionary, not the encoder, is the binding constraint, then four
+testable claims follow. The first asks whether matching the dictionary
+to the target distribution recovers \emph{downstream} signal (H1).
+The second asks whether it does so with a qualitatively better
+\emph{reconstruction-sparsity} structure (H2).  The third asks whether
+the standard \emph{monosemanticity metrics} we would use to adjudicate
+H1 and H2 are themselves trustworthy under shift, or whether they need
+to be replaced with coverage-aware alternatives (H3).  The fourth asks
+whether the base-vs-domain gap \emph{scales with shift severity},
+giving a practical deployment criterion (H4).  We state each precisely
+below.
+
+\begin{itemize}
+    \item \textbf{H1 (Distribution dependence of downstream utility).}
+    Sparse autoencoders are distribution-dependent: dictionaries trained on
+    the target distribution preserve downstream task performance better
+    than those trained on the source distribution. Concretely, a domain
+    SAE's encode-decode cycle retains more classification-relevant signal
+    than a base SAE's, and zero-shot accuracy drops less under domain-SAE
+    intervention across target domains.
+
+    \item \textbf{H2 (Distribution dependence of reconstruction-sparsity structure).}
+    Distribution-matched SAEs achieve a more efficient
+    reconstruction-sparsity trade-off, encoding target-domain structure
+    with fewer but more informative features. Reconstruction loss, $L_0$
+    sparsity, and activation entropy jointly improve when the dictionary
+    is matched to the target activation space, indicating dictionary
+    elements aligned with true modes of variation rather than irrelevant
+    source-distribution directions.
+
+    \item \textbf{H3 (Coverage-aware interpretability).}
+    Standard monosemanticity metrics overestimate interpretability under
+    distribution shift; coverage-aware evaluation reveals that
+    distribution-matched SAEs are more monosemantic on the target domain.
+    A base SAE can appear spuriously monosemantic by consistently mapping
+    unfamiliar inputs to a small set of generic features. Our proposed
+    DAMS metric decomposes monosemanticity into Effective Coverage (EC),
+    Concept Separability (CSS), and Feature Specificity (FSS), and
+    correctly ranks domain SAEs higher across target datasets.
+
+    \item \textbf{H4 (Shift severity governs the gap).}
+    The interpretability gap between source-trained and target-trained
+    SAEs scales with the magnitude of domain shift, revealing a failure
+    boundary for unadapted dictionaries. As pretraining-to-target
+    distance increases, base SAEs degrade faster than domain SAEs on all
+    metrics. The gap widens monotonically with shift severity, showing
+    that dictionaries are distribution-bound objects that require
+    updating in proportion to the shift.
+\end{itemize}
+

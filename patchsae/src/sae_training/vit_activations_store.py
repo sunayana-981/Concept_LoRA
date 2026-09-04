@@ -42,8 +42,16 @@ class ViTActivationsStore:
         batch_dict = {"image": [], "label": []}
 
         def _add_data(current_item, batch_dict):
-            for key, value in current_item.items():
-                batch_dict[key].append(value)
+            # Only pull the keys batch_dict declares (image, label) -- some HF
+            # Hub dataset variants (e.g. timm/oxford-iiit-pet) include extra
+            # metadata columns (image_id, label_cat_dog, ...) that batch_dict
+            # was never meant to hold. Some imagefolder datasets (e.g. cityscapes,
+            # whose "train" class dir collides with HF's split-name autodetection)
+            # end up with no label column at all; "label" is only read downstream
+            # when process_labels=True, so skip it rather than KeyError.
+            for key in batch_dict:
+                if key in current_item:
+                    batch_dict[key].append(current_item[key])
 
         for _ in range(self.batch_size):
             try:

@@ -1,0 +1,70 @@
+{
+  "pets": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/oxford_pets_imagefolder/train",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/oxford_pets/16shots/seed1/lora_weights.pt"
+  },
+  "eurosat": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/eurosat/2750",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/eurosat/16shots/seed1/lora_weights.pt"
+  },
+  "pathmnist": {
+    "type": "medmnist_npz",
+    "npz_path": "/home/sunayana/Documents/Concept_LoRA/data/pathmnist_imagefolder/pathmnist.npz",
+    "imagefolder_root": "/home/sunayana/Documents/Concept_LoRA/data/pathmnist_imagefolder",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/medmnist/16shots/seed1/lora_weights.pt"
+  },
+  "imagenet_subset": {
+    "type": "imagefolder",
+    "path": null,
+    "lora_checkpoint": null,
+    "note": "path is supplied via --imagenet_subset_dir; lora_checkpoint via --lora_checkpoints (e.g. reuse the pathmnist LoRA for the old-domain eval)"
+  },
+  "caltech101": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/caltech-101/Caltech101/101_ObjectCategories",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/caltech101/16shots/seed1/lora_weights.pt"
+  },
+  "cityscapes": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/cityscapes_imagefolder/train",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/cityscapes/16shots/seed1/lora_weights.pt"
+  },
+  "cub2002011": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/cub2002011/train",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/cub2002011/16shots/seed1/lora_weights.pt"
+  },
+  "dtd": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/dtd/images",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/dtd/16shots/seed42/lora_weights.pt",
+    "note": "only a seed42 LoRA checkpoint exists for dtd (others use seed1)"
+  },
+  "fgvc": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/fgvc_imagefolder/train",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/fgvc/16shots/seed1/lora_weights.pt"
+  },
+  "kitti": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/kitti_imagefolder/train",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/kitti/16shots/seed1/lora_weights.pt"
+  },
+  "officehome": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/officehome_imagefolder",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/officehome/16shots/seed1/lora_weights.pt"
+  },
+  "ucf101": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/UCF101/UCF-101-midframes",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/ucf101/16shots/seed1/lora_weights.pt"
+  },
+  "imagenet_anchor": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/imagenet/val",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16/imagenet/16shots/seed1/lora_weights.pt"
+  }
+}

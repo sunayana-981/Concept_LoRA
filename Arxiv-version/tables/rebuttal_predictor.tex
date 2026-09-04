@@ -1,0 +1,34 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{Embedding distance vs.\ concept distance as predictors of generic-SAE
+degradation.} Degradation is $\mathrm{acc}(\text{LoRA})-\mathrm{acc}(\text{LoRA}+\bar{S})$
+on the LoRA-adapted CLIP ViT-B/16. $\mathrm{MMD}^2$ is the unbiased RBF MMD between
+ImageNet and the target domain in CLIP image-embedding space; \texttt{concept\_gap} is
+the mean cosine distance from each target class name to its nearest ImageNet-1k class
+name in CLIP text-embedding space. Oxford~Pets has the \emph{largest} embedding distance
+but the second-smallest degradation, and simultaneously the \emph{smallest} concept gap:
+its vocabulary is already covered by ImageNet's $\sim$120 dog and several cat classes.}
+\label{tab:concept_gap}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lcccl}
+\toprule
+\textbf{Dataset} & $\mathbf{MMD^2}$ & \textbf{concept\_gap} & \textbf{Degrad.\ (pp)} & \textbf{Nearest ImageNet class} \\
+\midrule
+oxford\_pets & \bf 0.614 & \bf 0.109 & 3.56  & abyssinian $\rightarrow$ Vizsla \\
+caltech101   & 0.028 & 0.138 & 1.33  & okapi $\rightarrow$ impala \\
+eurosat      & 0.291 & 0.199 & 4.00  & SeaLake $\rightarrow$ sea lion \\
+ucf101       & 0.126 & 0.218 & 4.89  & Throw Discus $\rightarrow$ basketball \\
+dtd          & 0.090 & 0.232 & 5.33  & veined $\rightarrow$ prison \\
+pathmnist    & 0.423 & 0.265 & 11.55 & smooth muscle $\rightarrow$ eel \\
+fgvc         & 0.233 & 0.293 & 14.22 & C-47 $\rightarrow$ military aircraft \\
+cub2002011   & 0.154 & \bf 0.411 & 13.78 & Pomarine Jaeger $\rightarrow$ albatross \\
+\midrule
+\multicolumn{5}{l}{\emph{Association with degradation across the eight domains}} \\
+\quad Pearson $r$ ($p$)   & \multicolumn{1}{c}{0.06 (0.88)} & \multicolumn{1}{c}{\bf 0.87 (0.005)} & & \\
+\quad Spearman $\rho$ ($p$) & \multicolumn{1}{c}{0.12 (0.78)} & \multicolumn{1}{c}{\bf 0.95 (0.0002)} & & \\
+\quad Full-sample $R^2$   & \multicolumn{1}{c}{0.004} & \multicolumn{1}{c}{\bf 0.753} & & \\
+\quad LODO $R^2$          & \multicolumn{1}{c}{$-1.21$} & \multicolumn{1}{c}{\bf 0.506} & & \\
+\bottomrule
+\end{tabular}
+\end{table}

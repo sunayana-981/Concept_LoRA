@@ -12,6 +12,7 @@ from tqdm import tqdm
 
 from src.sae_training.config import Config
 from src.sae_training.hooked_vit import Hook, HookedVisionTransformer
+from src.sae_training.provenance import build_training_metadata
 from src.sae_training.sparse_autoencoder import SparseAutoencoder
 from src.sae_training.vit_activations_store import ViTActivationsStore
 
@@ -197,10 +198,25 @@ class SAETrainer:
             path = f"{self.cfg.checkpoint_path}/final_{self.sae.get_name()}.pt"
         else:
             path = f"{self.cfg.checkpoint_path}/{self.n_training_tokens}_{self.sae.get_name()}.pt"
-        self.sae.save_model(path)
+        vectors_per_example = getattr(
+            self.cfg, "activation_vectors_per_example", None
+        ) or 1
+        requested_examples = getattr(
+            self.cfg, "training_examples", None
+        ) or self.cfg.total_training_tokens
+        metadata = build_training_metadata(
+            examples_seen=self.n_training_tokens,
+            training_steps=self.n_training_steps,
+            requested_examples=requested_examples,
+            activation_vectors_per_example=vectors_per_example,
+        )
+        self.sae.save_model(path, training_metadata=metadata)
 
     def fit(self) -> SparseAutoencoder:
-        pbar = tqdm(total=self.cfg.total_training_tokens, desc="Training SAE")
+        pbar = tqdm(
+            total=self.cfg.total_training_tokens,
+            desc="Training SAE (examples)",
+        )
 
         try:
             # Train loop
@@ -237,18 +253,24 @@ class SAETrainer:
     def run_evals(self):
         self.sae.eval()
 
-        # Detect if model is MaPLe (CustomCLIP) — it uses image_encoder
-        # instead of vision_model, requiring is_custom=True for hooks.
-        inner_model = self.model.model if hasattr(self.model, 'model') else self.model
-        is_maple = hasattr(inner_model, 'image_encoder') and not hasattr(inner_model, 'vision_model')
-
-        # DINO/DINOv2 models are vision-only — they have no text encoder and no
-        # contrastive loss.  run_with_hooks() is also CLIP-specific.  Detect this
-        # by checking whether the model supports contrastive-loss evaluation.
-        is_contrastive = hasattr(self.model, 'run_with_hooks') and hasattr(self.model, 'contrastive_loss')
-        if not is_contrastive:
-            print("[run_evals] Vision-only model detected (no contrastive loss). "
-                  "Skipping contrastive reconstruction score.")
+        # `hasattr(self.model, 'run_with_hooks'/'contrastive_loss')` doesn't
+        # actually distinguish backbones: HookedVisionTransformer defines both
+        # methods unconditionally regardless of backbone, so that check never
+        # skips DINOv2 -- it always evaluated True and crashed instead of
+        # skipping. Use the backbone registry's has_text_tower flag instead,
+        # which is the actual thing that determines whether a contrastive
+        # loss is even meaningful.
+        backbone_spec = getattr(self.model, "backbone_spec", None)
+        backbone_name = getattr(self.model, "backbone", "clip")
+        if backbone_spec is not None and not backbone_spec.has_text_tower:
+            print(f"[run_evals] Backbone '{backbone_name}' has no text tower "
+                  "(no contrastive loss). Skipping contrastive reconstruction score.")
+            self.sae.train()
+            return
+        if backbone_spec is not None and not backbone_spec.is_transformer_block:
+            print(f"[run_evals] Backbone '{backbone_name}' is not a transformer-block "
+                  "backbone -- skipping contrastive reconstruction score "
+                  "(reconstruction/ablation hooks are ViT-specific).")
             self.sae.train()
             return
 
@@ -257,7 +279,7 @@ class SAETrainer:
                 self.sae.cfg.block_layer,
                 self.sae.cfg.module_name,
                 hook_fn,
-                is_custom=is_maple,
+                backbone=backbone_name,
                 return_module_output=False,
             )
 

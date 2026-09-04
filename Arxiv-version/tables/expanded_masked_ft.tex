@@ -1,0 +1,33 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{Masked SAE finetuning across new backbones and new SAE architectures.}
+Each generic dictionary of Table~\ref{tab:expanded_base_sae} is adapted to nine target
+datasets with its top-$20\%$ most-active units frozen ($8{,}192/40{,}960$ for ALIGN;
+$9{,}830/49{,}152$ for DINOv2 and SigLIP2). Entries are final training reconstruction
+MSE at a $32{,}768$-token budget. Protection is exact rather than approximate: protected
+parameters --- including JumpReLU's learned $\log\theta$ --- were verified bitwise
+identical before and after every optimiser step. The \textsc{DINOv2}$\cdot$JumpReLU
+column is absent because its generic dictionary did not complete in this run, and its
+nine dependent runs correctly refused to start from a missing dictionary rather than
+proceeding; \textsc{ALIGN}$\cdot$Top-$k$/caltech101 is a single missing cell.}
+\label{tab:expanded_masked_ft}
+\setlength{\tabcolsep}{7pt}
+\begin{tabular}{lccccc}
+\toprule
+& \multicolumn{3}{c}{\textbf{Top-$k$}} & \multicolumn{2}{c}{\textbf{JumpReLU}} \\
+\cmidrule(r){2-4}\cmidrule(l){5-6}
+\textbf{Dataset} & \textbf{DINOv2} & \textbf{ALIGN} & \textbf{SigLIP2} & \textbf{ALIGN} & \textbf{SigLIP2} \\
+\midrule
+caltech101 & 0.0071 & --- & 0.0094 & 0.0189 & 0.0231 \\
+cityscapes & 0.0031 & 0.0157 & 0.0053 & 0.0111 & 0.0167 \\
+cub2002011 & 0.0056 & 0.0094 & 0.0058 & 0.0119 & 0.0170 \\
+dtd        & 0.0064 & 0.0095 & 0.0074 & 0.0160 & 0.0221 \\
+eurosat    & 0.0065 & 0.0119 & 0.0063 & 0.0103 & 0.0161 \\
+fgvc       & 0.0048 & 0.0118 & 0.0058 & 0.0144 & 0.0169 \\
+kitti      & 0.0043 & 0.0230 & 0.0068 & 0.0127 & 0.0167 \\
+officehome & 0.0066 & 0.0093 & 0.0106 & 0.0194 & 0.0224 \\
+ucf101     & 0.0095 & 0.0095 & 0.0075 & 0.0154 & 0.0222 \\
+\bottomrule
+\end{tabular}
+\end{table}

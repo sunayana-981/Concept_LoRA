@@ -30,7 +30,7 @@ cub2002011:
   n_classes: 200
 
 dtd:
-  local_path: /home/sunayana/Documents/Concept_LoRA/data/DTD/images
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/dtd/images
   hf_path: imagefolder
   split: train
   label_key: label
@@ -83,6 +83,27 @@ ucf101:
   split: train
   label_key: label
   n_classes: 101
+
+officehome:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/officehome_imagefolder
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 65
+
+kitti:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/kitti_imagefolder/train
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 7
+
+cityscapes:
+  local_path: /home/sunayana/Documents/Concept_LoRA/data/cityscapes_imagefolder/train
+  hf_path: imagefolder
+  split: train
+  label_key: label
+  n_classes: 19
 
 # ── PACS (leave-one-out splits for CLIPood / DG experiments) ──────────────────
 # Run tasks/setup_pacs_imagefolder.py --pacs_root /path/to/PACS first to create

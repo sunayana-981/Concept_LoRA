@@ -63,3 +63,24 @@ patchsae/full_training_log.txt
 
 
 
+
+# Adapter weights and sweep artifacts (large, regenerable from the run scripts)
+lora_weights/
+lora_weights_rerun/
+lora_weights_rerun_fixed/
+unified_weights/
+unified_logs_missing/
+unified_logs_requested/
+sae_probe_ablation/
+sae_vlm/output/
+sae_vlm/output1/
+results/sae_probe_ablation_results.csv
+
+# LaTeX build artifacts
+*.aux
+*.bbl
+*.blg
+*.out
+*.synctex.gz
+*.fls
+*.fdb_latexmk

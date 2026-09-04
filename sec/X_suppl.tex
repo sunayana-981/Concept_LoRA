@@ -1,0 +1,47 @@
+\clearpage
+\setcounter{page}{1}
+\maketitlesupplementary
+
+
+\section{Rationale}
+\label{sec:rationale}
+% 
+\subsection{Masked fine-tuning ablation reproducibility}
+
+The complete sweep is launched by
+\texttt{patchsae/run\_masking\_ablation.sh}. It trains the Cartesian product of
+five target datasets, seven protected fractions, and three SAE seeds (105 runs).
+The script is restart-safe and writes a manifest containing the exact checkpoint,
+LoRA checkpoint, fraction, and seed for every completed run. Evaluation uses
+\texttt{tasks/eval\_masking\_ablation.py}; its ImageNet subset seed is fixed at
+2026 and is independent of the training seeds. Aggregation checks the number of
+unique seeds per cell and retains raw per-seed measurements alongside the mean
+and confidence interval. Checkpoints store the protected mask, realized numbers
+of protected/free units, number of optimization steps and tokens, and whether
+post-update exact restoration was enabled.
+
+We treat target accuracy and ImageNet accuracy as the two primary outcomes.
+Reconstruction cosine, FVE, $L_0$, and dead-feature fraction are secondary
+mechanistic outcomes. The percentage grid and primary outcomes are fixed before
+examining the completed sweep; failed runs are rerun with the same seed rather
+than omitted or replaced.
+
+
+
+
+
+%section - possibly prompt RC
+
+%section rest of the datasets
+
+
+
+Having the supplementary compiled together with the main paper means that:
+% 
+\begin{itemize}
+\item The supplementary can back-reference sections of the main paper, for example, we can refer to \cref{sec:intro};
+\item The main paper can forward reference sub-sections within the supplementary explicitly (e.g. referring to a particular experiment); 
+\item When submitted to arXiv, the supplementary will already included at the end of the paper.
+\end{itemize}
+% 
+To split the supplementary pages from the main paper, you can use \href{https://support.apple.com/en-ca/guide/preview/prvw11793/mac#:~:text=Delete%20a%20page%20from%20a,or%20choose%20Edit%20%3E%20Delete).}{Preview (on macOS)}, \href{https://www.adobe.com/acrobat/how-to/delete-pages-from-pdf.html#:~:text=Choose%20%E2%80%9CTools%E2%80%9D%20%3E%20%E2%80%9COrganize,or%20pages%20from%20the%20file.}{Adobe Acrobat} (on all OSs), as well as \href{https://superuser.com/questions/517986/is-it-possible-to-delete-some-pages-of-a-pdf-document}{command line tools}.

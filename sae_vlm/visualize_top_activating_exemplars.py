@@ -23,7 +23,9 @@ Usage:
 """
 
 import argparse
+import math
 import os
+import random
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -204,8 +206,8 @@ def build_neuron_index(
     N_FEAT  = sae.W_enc.shape[1]
     n       = len(combined_ds)
 
-    top_vals = torch.zeros(N_FEAT, n_top)
-    top_idx  = torch.zeros(N_FEAT, n_top, dtype=torch.long)
+    top_vals = torch.full((N_FEAT, n_top), -float("inf"))
+    top_idx  = torch.full((N_FEAT, n_top), -1, dtype=torch.long)
     all_lats, all_src = [], []
     offset   = 0
 
@@ -235,34 +237,60 @@ def build_neuron_index(
 
 # ── Sample selection ──────────────────────────────────────────────────────────
 
-def pick_samples(combined_ds: CombinedHFDataset, n_samples: int,
-                 all_lats: torch.Tensor, classnames: List[str]) -> List[int]:
-    """Pick n_samples diverse query images from the TARGET domain only."""
+def score_and_select(
+    combined_ds: CombinedHFDataset,
+    conditions: List[dict],
+    n_select: int,
+    n_exemplars: int,
+) -> List[int]:
+    """
+    Score every target-domain image by how clearly it shows the hierarchy
+    AdSAE > Cross-SAE > Base SAE in exemplar domain fraction.
+
+    Score = (adsae_frac - base_frac)
+            + 0.3 if adsae > cross > base   (correct ordering bonus)
+
+    Diversity: cap images per label to ceil(n_select / n_actual_labels),
+    then pad with remaining best-scored images if needed.
+    """
     n_target = combined_ds.n_a
-    # Group target indices by class
-    by_cls: Dict[int, List[int]] = {}
-    for i in range(n_target):
-        item = combined_ds.ds_a[i]
-        lbl  = item.get(combined_ds.lk_a, 0)
-        by_cls.setdefault(int(lbl), []).append(i)
 
-    n_cls  = len(by_cls)
-    step   = max(1, n_cls // n_samples)
-    chosen = sorted(by_cls.keys())[::step][:n_samples]
+    scored: List[Tuple[float, int, int]] = []  # (score, label, qidx)
+    for qidx in range(n_target):
+        fracs = []
+        for cond in conditions:
+            q_lat     = cond["all_latents"][qidx].float()
+            fire_mask = q_lat > 0
+            nid       = int(torch.argmax(q_lat * fire_mask.float())
+                           if fire_mask.sum() > 0 else torch.argmax(q_lat))
+            ex_idxs   = [i for i in cond["top_idx"][nid].tolist()[:n_exemplars] if i >= 0]
+            n_dom     = sum(1 for ei in ex_idxs if int(cond["all_src"][ei]) == DOMAIN)
+            fracs.append(n_dom / max(len(ex_idxs), 1))
 
-    samples = []
-    for cls in chosen:
-        cands = [c for c in by_cls[cls] if c < all_lats.shape[0]]
-        if not cands:
-            continue
-        acts  = all_lats[cands].float().sum(dim=1)
-        best  = cands[int(acts.argmax())]
-        samples.append(best)
+        base_f, cross_f, ad_f = fracs
+        score = ad_f - base_f
+        if ad_f > cross_f > base_f:
+            score += 0.3
 
-    # pad if needed
-    if len(samples) < n_samples:
-        samples += list(range(n_samples - len(samples)))
-    return samples[:n_samples]
+        lbl = int(combined_ds[qidx]["label"])
+        scored.append((score, lbl, qidx))
+
+    scored.sort(reverse=True)
+
+    # Cap per actual label (not classnames count, which may differ)
+    n_actual_lbls = max(len({lbl for _, lbl, _ in scored}), 1)
+    max_per_lbl   = max(1, math.ceil(n_select / n_actual_lbls))
+
+    cls_count: Dict[int, int] = {}
+    selected: List[int] = []
+    for _, lbl, qidx in scored:
+        if len(selected) >= n_select:
+            break
+        if cls_count.get(lbl, 0) < max_per_lbl:
+            selected.append(qidx)
+            cls_count[lbl] = cls_count.get(lbl, 0) + 1
+
+    return selected
 
 
 # ── Image helpers ─────────────────────────────────────────────────────────────
@@ -295,200 +323,153 @@ def plot_exemplars(
     top_neurons: int,
     exemplars_per_neuron: int,
     ds_name: str,
-    cfg: dict,
     out_path: str,
+    page: int = 0,
+    total_pages: int = 1,
 ):
-    n_s   = len(sample_indices)
-    n_c   = len(conditions)
-    e     = exemplars_per_neuron
-    top_k = top_neurons
-    n_tgt = combined_ds.n_a
+    """
+    Layout per query image:
+      [  Query  ] [ Row label ] [ex1][ex2][ex3][ex4][ex5]   <- Base SAE
+      [ (spans) ] [ Row label ] [ex1][ex2][ex3][ex4][ex5]   <- Cross-SAE
+      [  3 rows ] [ Row label ] [ex1][ex2][ex3][ex4][ex5]   <- AdSAE
 
-    # ── geometry ──────────────────────────────────────────────────────────────
-    img_w   = 1.08
-    lbl_w   = 1.35
-    qry_w   = 1.45
-    sep_w   = 0.15
+    Multiple query images are stacked vertically with a thin divider.
+    """
+    n_s = len(sample_indices)
+    n_c = len(conditions)
+    e   = exemplars_per_neuron
 
-    # cols: [query | cond_label | (e imgs + sep) * top_k]
-    wr = [qry_w, lbl_w]
-    for ni in range(top_k):
-        wr += [img_w] * e
-        if ni < top_k - 1:
-            wr.append(sep_w)
+    # ── geometry: all image cells are square (img_w × img_w) ──────────────────
+    img_w = 1.6    # inches per exemplar cell (square)
+    lbl_w = 2.0    # condition label column
+    div_h = 0.14   # thin divider between samples
 
+    # Column layout: [lbl_w | img_w * e]
+    # Row layout per sample: 1 header row (query) + n_c condition rows
+    wr = [lbl_w] + [img_w] * e
+
+    hr = []
+    for si in range(n_s):
+        hr.append(img_w)           # header: query image (square cell)
+        hr.extend([img_w] * n_c)   # one row per condition
+        if si < n_s - 1:
+            hr.append(div_h)
+
+    total_rows = len(hr)
     total_cols = len(wr)
-    row_h      = img_w + 0.58
-    total_rows = n_s * (n_c + 1)   # +1 sample header per sample
-    fig_h      = total_rows * row_h + 1.5
 
-    fig = plt.figure(figsize=(sum(wr), fig_h))
-    gs  = gridspec.GridSpec(
+    fig_w = sum(wr)
+    fig_h = sum(hr) + 0.1
+    fig   = plt.figure(figsize=(fig_w, fig_h))
+    gs    = gridspec.GridSpec(
         total_rows, total_cols, figure=fig,
-        hspace=0.52, wspace=0.04,
-        left=0.01, right=0.99, top=0.94, bottom=0.01,
-        width_ratios=wr,
+        hspace=0.04, wspace=0.04,
+        left=0.01, right=0.99, top=0.99, bottom=0.01,
+        width_ratios=wr, height_ratios=hr,
     )
 
-    # neuron column starts (accounting for label col + sep cols)
-    neu_starts = []
-    c = 2
-    for ni in range(top_k):
-        neu_starts.append(c)
-        c += e + (1 if ni < top_k - 1 else 0)
+    rows_per_sample = 1 + n_c   # header + conditions
 
-    row = 0
+    def _img_ax(gs_cell, pil_img, border_color, border_style="solid",
+                caption="", cap_color="#fff"):
+        ax = fig.add_subplot(gs_cell)
+        ax.set_xticks([]); ax.set_yticks([])
+        ax.imshow(pil_img, aspect="equal")
+        lw = 3.0
+        for sp in ax.spines.values():
+            sp.set_visible(True)
+            sp.set_edgecolor(border_color)
+            sp.set_linewidth(lw)
+            if border_style == "dashed":
+                sp.set_linestyle("--")
+        # caption overlaid at bottom of image (no xlabel shrinkage)
+        if caption:
+            ax.text(0.5, 0.02, caption, transform=ax.transAxes,
+                    ha="center", va="bottom", fontsize=6.5,
+                    color=cap_color,
+                    bbox=dict(boxstyle="round,pad=0.15", fc="#00000088", ec="none"))
+        return ax
 
     for si, qidx in enumerate(sample_indices):
-        q_pil   = _pil(combined_ds, qidx, size=int(qry_w * 88))
-        q_name  = _cls_name(combined_ds, qidx, classnames)
+        q_pil  = _pil(combined_ds, qidx, size=int(img_w * 100))
+        q_name = _cls_name(combined_ds, qidx, classnames)
 
-        # ── sample divider ────────────────────────────────────────────────────
-        ax_hdr = fig.add_subplot(gs[row, :])
+        base_r = si * (rows_per_sample + 1)   # each sample occupies rows_per_sample + 1 divider row
+
+        # ── header row: query image + class label ──────────────────────────
+        ax_q = _img_ax(gs[base_r, 0], q_pil, "#333333",
+                       caption=f'"{q_name}"', cap_color="#fff")
+
+        # class label spanning exemplar columns
+        ax_hdr = fig.add_subplot(gs[base_r, 1:])
         ax_hdr.axis("off")
         ax_hdr.set_facecolor("#eef1fb")
-        ax_hdr.text(0.01, 0.5, f"Sample {si+1}  ·  class: \"{q_name}\"",
+        ax_hdr.text(0.03, 0.5, f"Query image  ·  class: {q_name}",
                     transform=ax_hdr.transAxes, ha="left", va="center",
-                    fontsize=9, fontweight="bold", color="#222244")
-        row += 1
+                    fontsize=11, fontweight="bold", color="#333355")
+
+        # ── divider row ────────────────────────────────────────────────────
+        if si < n_s - 1:
+            ax_div = fig.add_subplot(gs[base_r + rows_per_sample, :])
+            ax_div.axis("off")
+            ax_div.set_facecolor("#c8cce0")
 
         for ci, cond in enumerate(conditions):
             ccolor  = cond["color"]
-            top_idx = cond["top_idx"]      # [N_FEAT, n_top]
-            all_src = cond["all_src"]      # [N] uint8
-            all_lat = cond["all_latents"]  # [N, N_FEAT] float16
-            acc_key = COND_KEYS[ci]
+            top_idx = cond["top_idx"]
+            all_src = cond["all_src"]
+            all_lat = cond["all_latents"]
 
-            # top firing neurons for the query
-            q_lat       = all_lat[qidx].float()
-            fire_mask   = q_lat > 0
+            row = base_r + 1 + ci   # +1 to skip header
+
+            # top firing neuron
+            q_lat     = all_lat[qidx].float()
+            fire_mask = q_lat > 0
             if fire_mask.sum() == 0:
-                top_neu = torch.argsort(q_lat, descending=True)[:top_k].tolist()
+                nid = int(torch.argmax(q_lat))
             else:
-                top_neu = torch.argsort(q_lat * fire_mask.float(),
-                                        descending=True)[:top_k].tolist()
+                nid = int(torch.argmax(q_lat * fire_mask.float()))
 
-            # ── query image (once, spanning all condition sub-rows) ───────────
-            ax_q = fig.add_subplot(gs[row, 0])
-            ax_q.axis("off")
-            if ci == 0:
-                ax_q.imshow(q_pil, aspect="auto")
-                for sp in ax_q.spines.values():
-                    sp.set_visible(True); sp.set_edgecolor("#333"); sp.set_linewidth(2)
-                ax_q.set_xticks([]); ax_q.set_yticks([])
-                ax_q.set_xlabel(f"Query\n{q_name}", fontsize=7, labelpad=2, color="#333")
-            else:
-                ax_q.set_facecolor("#f8f8f8")
+            ex_idxs = [i for i in top_idx[nid].tolist()[:e] if i >= 0]
+            ex_srcs = [int(all_src[ei]) for ei in ex_idxs]
 
-            # ── condition label ────────────────────────────────────────────────
-            ax_lbl = fig.add_subplot(gs[row, 1])
+            # ── condition label ────────────────────────────────────────────
+            ax_lbl = fig.add_subplot(gs[row, 0])
             ax_lbl.axis("off")
-            ax_lbl.set_facecolor(ccolor + "18")
-            acc = cfg.get(acc_key)
-            acc_str = f"\nAcc: {acc:.1f}%" if acc else ""
-            ax_lbl.text(0.5, 0.55, COND_NAMES[ci] + acc_str,
-                        transform=ax_lbl.transAxes, ha="center", va="center",
-                        fontsize=7, fontweight="bold", color=ccolor, linespacing=1.4)
+            ax_lbl.set_facecolor(ccolor + "22")
             ax_lbl.add_patch(mpatches.FancyArrowPatch(
                 (0.0, 0.0), (0.0, 1.0), transform=ax_lbl.transAxes,
-                arrowstyle="-", color=ccolor, linewidth=4))
+                arrowstyle="-", color=ccolor, linewidth=5))
+            ax_lbl.text(0.55, 0.5, COND_NAMES[ci],
+                        transform=ax_lbl.transAxes, ha="center", va="center",
+                        fontsize=9, fontweight="bold", color=ccolor, linespacing=1.5)
 
-            # ── exemplar groups ────────────────────────────────────────────────
-            for ni in range(top_k):
-                nid      = top_neu[ni] if ni < len(top_neu) else 0
-                act_val  = float(q_lat[nid])
-                ex_idxs  = top_idx[nid].tolist()   # global combined indices
-                ex_srcs  = [int(all_src[ei]) for ei in ex_idxs]
+            # ── exemplar images ────────────────────────────────────────────
+            for ei in range(e):
+                if ei >= len(ex_idxs):
+                    ax = fig.add_subplot(gs[row, 1 + ei])
+                    ax.axis("off"); ax.set_facecolor("#f0f0f0"); continue
 
-                # Domain-fraction annotation on first exemplar
-                n_dom = sum(1 for s in ex_srcs if s == DOMAIN)
-                n_in  = sum(1 for s in ex_srcs if s == IMAGENET)
-                frac  = n_dom / max(len(ex_srcs), 1)
+                gidx  = int(ex_idxs[ei])
+                src   = int(ex_srcs[ei])
+                is_in = (src == IMAGENET)
 
-                col0 = neu_starts[ni]
-                for ei in range(e):
-                    ax = fig.add_subplot(gs[row, col0 + ei])
-                    ax.axis("off")
-                    if ei >= len(ex_idxs):
-                        ax.set_facecolor("#f0f0f0"); continue
+                try:
+                    pil      = _pil(combined_ds, gidx, size=int(img_w * 100))
+                    cls_name = _cls_name(combined_ds, gidx, classnames)
+                    style    = "dashed" if is_in else "solid"
+                    color    = "#aaaaaa" if is_in else ccolor
+                    cap      = cls_name
+                    cap_col  = "#ddd" if is_in else "#fff"
+                    _img_ax(gs[row, 1 + ei], pil, color,
+                            border_style=style, caption=cap, cap_color=cap_col)
+                except Exception:
+                    ax = fig.add_subplot(gs[row, 1 + ei])
+                    ax.text(0.5, 0.5, "err", ha="center", va="center",
+                            fontsize=7, color="gray")
 
-                    gidx  = int(ex_idxs[ei])
-                    src   = int(ex_srcs[ei])
-                    is_in = (src == IMAGENET)
-
-                    try:
-                        pil      = _pil(combined_ds, gidx, size=92)
-                        cls_name = _cls_name(combined_ds, gidx, classnames)
-
-                        ax.imshow(pil, aspect="auto")
-
-                        # border: solid condition color = target, dashed grey = ImageNet
-                        if is_in:
-                            ax.set_facecolor("#dddddd")
-                            for sp in ax.spines.values():
-                                sp.set_visible(True)
-                                sp.set_edgecolor("#999999")
-                                sp.set_linewidth(1.5)
-                                sp.set_linestyle("--")
-                        else:
-                            for sp in ax.spines.values():
-                                sp.set_visible(True)
-                                sp.set_edgecolor(ccolor)
-                                sp.set_linewidth(2.0)
-
-                        ax.set_xticks([]); ax.set_yticks([])
-
-                        # Caption: first exemplar gets neuron id + act + domain fraction
-                        if ei == 0:
-                            cap = (f"N#{nid}  act={act_val:.1f}\n"
-                                   f"dom={n_dom}/{len(ex_srcs)} "
-                                   f"({'▲' if frac >= 0.5 else '▼'}domain)")
-                            font_color = "#116611" if frac >= 0.5 else "#882222"
-                        else:
-                            cap = f"{'[IN]' if is_in else ''}{cls_name}"
-                            font_color = "#666" if is_in else "#222"
-
-                        ax.set_xlabel(cap, fontsize=5.2, labelpad=1.5,
-                                      color=font_color)
-                    except Exception:
-                        ax.text(0.5, 0.5, "err", ha="center", va="center",
-                                fontsize=6, color="gray")
-
-            row += 1
-
-    # ── legend & suptitle ─────────────────────────────────────────────────────
-    handles = [
-        mpatches.Patch(facecolor="white", edgecolor=COND_COLORS[0], linewidth=2,
-                       label="Base SAE"),
-        mpatches.Patch(facecolor="white", edgecolor=COND_COLORS[1], linewidth=2,
-                       label="Cross-SAE"),
-        mpatches.Patch(facecolor="white", edgecolor=COND_COLORS[2], linewidth=2,
-                       label="AdSAE"),
-        mpatches.Patch(facecolor="white", edgecolor="#999", linewidth=1.5,
-                       linestyle="--", label="ImageNet exemplar"),
-        mpatches.Patch(facecolor="white", edgecolor="#555", linewidth=2,
-                       label="Target-domain exemplar"),
-    ]
-    fig.legend(handles=handles, loc="lower center", ncol=5,
-               fontsize=7.5, framealpha=0.9,
-               bbox_to_anchor=(0.5, 0.0))
-
-    accs = [cfg.get(k) for k in COND_KEYS]
-    acc_str = "  |  ".join(
-        f"{s}: {a:.1f}%" for s, a in zip(COND_SHORT, accs) if a is not None
-    )
-    fig.suptitle(
-        f"Top Activating Exemplars  (target + ImageNet pool)  ·  {ds_name}\n"
-        f"Acc:  {acc_str}\n"
-        "Solid borders = target-domain image.  Dashed grey = ImageNet image.  "
-        "dom=X/Y = how many of Y top exemplars are from the target domain.\n"
-        "AdSAE neurons are dominated by target-domain exemplars; "
-        "Base/Cross-SAE pull in ImageNet images, diluting domain specificity.",
-        fontsize=8.5, fontweight="bold", y=0.998, va="top",
-    )
-
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    fig.savefig(out_path, dpi=140, bbox_inches="tight")
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved → {out_path}")
 
@@ -506,11 +487,24 @@ def process_dataset(ds_name: str, args, registry: dict,
 
     print(f"\n{'═'*65}\n  Dataset: {ds_name.upper()}\n{'═'*65}")
 
-    tgt_ds     = get_dataset(ds_name, registry=registry,
-                             max_samples=args.max_dataset_images)
-    classnames = get_classnames(ds_name, dataset=tgt_ds, registry=registry)
-    label_key  = get_label_key(ds_name, tgt_ds, registry=registry)
-    print(f"  Target: {len(tgt_ds):,} images, {len(classnames)} classes")
+    # Load full dataset first, then stratified-subsample to max_dataset_images
+    tgt_ds_full = get_dataset(ds_name, registry=registry)
+    classnames  = get_classnames(ds_name, dataset=tgt_ds_full, registry=registry)
+    label_key   = get_label_key(ds_name, tgt_ds_full, registry=registry)
+
+    all_labels = tgt_ds_full[label_key]   # fast batch read from HF dataset
+    by_cls: Dict[int, List[int]] = {}
+    for i, lbl in enumerate(all_labels):
+        by_cls.setdefault(int(lbl), []).append(i)
+    n_cls    = len(by_cls)
+    per_cls  = max(1, args.max_dataset_images // max(n_cls, 1))
+    rng = random.Random(42)
+    indices  = []
+    for cls_idxs in by_cls.values():
+        indices.extend(rng.sample(cls_idxs, min(per_cls, len(cls_idxs))))
+    tgt_ds = tgt_ds_full.select(sorted(indices))
+    print(f"  Target: {len(tgt_ds_full):,} total → {len(tgt_ds):,} stratified "
+          f"({per_cls}/class × {n_cls} classes), {len(classnames)} classnames")
 
     # Combined dataset (target first, then ImageNet)
     combined = CombinedHFDataset(tgt_ds, imagenet_ds, label_key, imagenet_lk)
@@ -548,21 +542,33 @@ def process_dataset(ds_name: str, args, registry: dict,
             top_idx=top_idx, all_latents=all_lat, all_src=all_src,
         ))
 
-    # ── Select sample query images ────────────────────────────────────────────
-    print(f"\n  Selecting {args.n_samples} sample images...")
-    samples = pick_samples(combined, args.n_samples, built[2]["all_latents"], classnames)
+    # ── Select best query images by hierarchy score ───────────────────────────
+    print(f"\n  Scoring all {combined.n_a} target images for hierarchy clarity...")
+    samples = score_and_select(combined, built, args.n_samples,
+                               args.exemplars_per_neuron)
     names   = [_cls_name(combined, s, classnames) for s in samples]
-    print(f"  Samples: {list(zip(samples, names))}")
+    print(f"  Selected top-{len(samples)}: {list(zip(samples, names))}")
 
-    # ── Plot ──────────────────────────────────────────────────────────────────
-    out_path = os.path.join(args.out_dir, ds_name, "top_activating_exemplars.png")
-    plot_exemplars(
-        combined_ds=combined, sample_indices=samples,
-        conditions=built, classnames=classnames,
-        top_neurons=args.top_neurons,
-        exemplars_per_neuron=args.exemplars_per_neuron,
-        ds_name=ds_name, cfg=cfg, out_path=out_path,
-    )
+    # ── Plot — one file per query image ──────────────────────────────────────
+    spp         = args.samples_per_page
+    total_pages = math.ceil(len(samples) / spp)
+    for page in range(total_pages):
+        page_samples = samples[page * spp : (page + 1) * spp]
+        if spp == 1:
+            q_name   = _cls_name(combined, page_samples[0], classnames)
+            safe_cls = q_name.replace("/", "_").replace(" ", "_")
+            fname    = f"sample_{page + 1:03d}_{safe_cls}.png"
+        else:
+            fname = f"samples_{page * spp + 1:03d}-{min((page+1)*spp, len(samples)):03d}.png"
+        out_path = os.path.join(args.out_dir, ds_name, fname)
+        plot_exemplars(
+            combined_ds=combined, sample_indices=page_samples,
+            conditions=built, classnames=classnames,
+            top_neurons=args.top_neurons,
+            exemplars_per_neuron=args.exemplars_per_neuron,
+            ds_name=ds_name, out_path=out_path,
+            page=page, total_pages=total_pages,
+        )
 
     del bb_zs, bb_lora, base_sae, ad_sae
     if torch.cuda.is_available():
@@ -578,16 +584,18 @@ def main():
     parser.add_argument("--datasets",             nargs="+",
                         default=list(DATASET_CONFIGS.keys()),
                         choices=list(DATASET_CONFIGS.keys()))
-    parser.add_argument("--n_samples",            type=int, default=4)
-    parser.add_argument("--top_neurons",          type=int, default=2)
-    parser.add_argument("--exemplars_per_neuron", type=int, default=5)
-    parser.add_argument("--max_dataset_images",   type=int, default=2000)
-    parser.add_argument("--n_imagenet",           type=int, default=1000,
+    parser.add_argument("--n_samples",            type=int, default=50)
+    parser.add_argument("--samples_per_page",     type=int, default=1,
+                        help="Query images per output PNG (1 = one file per query)")
+    parser.add_argument("--top_neurons",          type=int, default=1)
+    parser.add_argument("--exemplars_per_neuron", type=int, default=10)
+    parser.add_argument("--max_dataset_images",   type=int, default=5000)
+    parser.add_argument("--n_imagenet",           type=int, default=5000,
                         help="ImageNet images to include in combined pool")
     parser.add_argument("--batch_size",           type=int, default=64)
     parser.add_argument("--num_workers",          type=int, default=4)
     parser.add_argument("--device",               default="cuda")
-    parser.add_argument("--out_dir",              default="out/exemplar_viz")
+    parser.add_argument("--out_dir",              default="out/exemplar_viz_indiv")
     args = parser.parse_args()
 
     device = args.device

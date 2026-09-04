@@ -113,6 +113,12 @@ PYTHONPATH=./ python tasks/compute_class_wise_sae_activation.py \
 
 ## 🎯 Steer Classification
 
+For the rebuttal's held-out, single-latent G-SAE vs FT-SAE causal experiment,
+use [`CAUSAL_STEERING.md`](CAUSAL_STEERING.md). That protocol preserves SAE
+reconstruction error, changes only one natural latent at a time, includes
+matched random-latent and full-reconstruction controls, and keeps feature
+selection disjoint from evaluation.
+
 Evaluate classification using feature steering with SAE latents.
 
 ### Prerequisites

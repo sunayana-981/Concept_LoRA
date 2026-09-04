@@ -1,70 +1,103 @@
+import json
 import os
 import random
-from scipy.io import loadmat
 from collections import defaultdict
 
-from .oxford_pets import OxfordPets
-from .utils import Datum, DatasetBase, read_json
+from .utils import Datum, DatasetBase
 
-"""
-template = ['a photo of a {}, a type of flower.']
-"""
 template = ['a photo of a {}.']
 
-class OxfordFlowers(DatasetBase):
+_IMG_EXTS = ('.jpg', '.jpeg', '.png', '.JPEG', '.JPG', '.PNG')
 
-    dataset_dir = 'Flower102'
+# Oxford 102 Flowers names keyed by the original 1-based class ID.
+#
+# The local image folders were converted from nelorth/oxford-flowers parquet.
+# Its ClassLabel vocabulary is the *lexicographic* ordering of string IDs:
+#   0 -> "1", 1 -> "10", 2 -> "100", ..., 14 -> "2", ...
+# Therefore folder i is an encoded ClassLabel index, not original_id - 1.
+_CAT_TO_NAME_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', '..', 'sae_vlm', 'configs', 'classnames', 'oxford_flowers_classnames.json',
+)
+
+
+def _load_flower_names():
+    try:
+        with open(_CAT_TO_NAME_PATH) as f:
+            d = json.load(f)
+        encoded_ids = sorted(d, key=str)
+        return [d[original_id] for original_id in encoded_ids]
+    except Exception:
+        return [str(i) for i in range(102)]
+
+
+_FLOWER_NAMES = _load_flower_names()
+
+
+def _few_shot_split(all_items, num_shots):
+    by_class = defaultdict(list)
+    for item in all_items:
+        by_class[item.label].append(item)
+
+    train, val, test = [], [], []
+    for items in by_class.values():
+        random.shuffle(items)
+        n_tr = min(num_shots, max(1, len(items) - 1))
+        n_va = min(4, len(items) - n_tr)
+        train.extend(items[:n_tr])
+        val.extend(items[n_tr:n_tr + n_va])
+        remaining = items[n_tr + n_va:]
+        test.extend(remaining if remaining else items)
+
+    if not val:
+        val = train[: max(1, len(train) // 5)]
+    return train, val, test
+
+
+class OxfordFlowers(DatasetBase):
+    """Oxford 102 Flowers.
+
+    Expected folder structure:
+        <root>/flowers102_imagefolder/train/<int>/<image>
+        <root>/flowers102_imagefolder/test/<int>/<image>
+
+    Folder names are 0-based encoded labels from the source parquet's
+    lexicographically ordered ClassLabel vocabulary.
+    """
+
+    dataset_dir = 'flowers102_imagefolder'
 
     def __init__(self, root, num_shots):
         self.dataset_dir = os.path.join(root, self.dataset_dir)
-        self.image_dir = os.path.join(self.dataset_dir, 'jpg')
-        self.label_file = os.path.join(self.dataset_dir, 'imagelabels.mat')
-        self.lab2cname_file = os.path.join(self.dataset_dir, 'cat_to_name.json')
-        self.split_path = os.path.join(self.dataset_dir, 'split_zhou_OxfordFlowers.json')
-
         self.template = template
 
-        train, val, test = OxfordPets.read_split(self.split_path, self.image_dir)
-        n_shots_val = min(num_shots, 4)
-        val = self.generate_fewshot_dataset(val, num_shots=n_shots_val)
-        train = self.generate_fewshot_dataset(train, num_shots=num_shots)
-        
-        super().__init__(train_x=train, val=val, test=test)
-    
-    def read_data(self):
-        tracker = defaultdict(list)
-        label_file = loadmat(self.label_file)['labels'][0]
-        for i, label in enumerate(label_file):
-            imname = f'image_{str(i + 1).zfill(5)}.jpg'
-            impath = os.path.join(self.image_dir, imname)
-            label = int(label)
-            tracker[label].append(impath)
-        
-        print('Splitting data into 50% train, 20% val, and 30% test')
+        train_dir = os.path.join(self.dataset_dir, 'train')
+        test_dir = os.path.join(self.dataset_dir, 'test')
 
-        def _collate(ims, y, c):
-            items = []
-            for im in ims:
-                item = Datum(
-                    impath=im,
-                    label=y-1, # convert to 0-based label
-                    classname=c
-                )
-                items.append(item)
-            return items
+        train_all = self._scan(train_dir)
+        test_items = self._scan(test_dir)
 
-        lab2cname = read_json(self.lab2cname_file)
-        train, val, test = [], [], []
-        for label, impaths in tracker.items():
-            random.shuffle(impaths)
-            n_total = len(impaths)
-            n_train = round(n_total * 0.5)
-            n_val = round(n_total * 0.2)
-            n_test = n_total - n_train - n_val
-            assert n_train > 0 and n_val > 0 and n_test > 0
-            cname = lab2cname[str(label)]
-            train.extend(_collate(impaths[:n_train], label, cname))
-            val.extend(_collate(impaths[n_train:n_train+n_val], label, cname))
-            test.extend(_collate(impaths[n_train+n_val:], label, cname))
-        
-        return train, val, test
+        train, val, _ = _few_shot_split(train_all, num_shots)
+        super().__init__(train_x=train, val=val, test=test_items)
+
+    @staticmethod
+    def _scan(split_dir):
+        """Walk integer-named class folders; map index i → _FLOWER_NAMES[i]."""
+        folders = sorted(
+            (d for d in os.listdir(split_dir)
+             if os.path.isdir(os.path.join(split_dir, d))),
+            key=lambda x: int(x),
+        )
+        items = []
+        for folder in folders:
+            label = int(folder)
+            classname = _FLOWER_NAMES[label] if label < len(_FLOWER_NAMES) else str(label)
+            cls_dir = os.path.join(split_dir, folder)
+            for fname in sorted(os.listdir(cls_dir)):
+                if fname.lower().endswith(_IMG_EXTS):
+                    items.append(Datum(
+                        impath=os.path.join(cls_dir, fname),
+                        label=label,
+                        classname=classname,
+                    ))
+        return items

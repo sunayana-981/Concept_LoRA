@@ -1,0 +1,42 @@
+
+\begin{table}[bht] %{l}{0.6\textwidth}
+%\begin{wraptable}{l}{0.6\textwidth}
+\centering
+\caption{\textbf{Classification accuracy (\%) for CLIP using different adapters (SAE-1)}
+Columns ordered by MMD from ImageNet (near\,\(\to\)\,far).
+G-SAE (trained on frozen model).
+FT-SAE (retrained after adaptation).
+\textbf{Bold}: best SAE-augmented result per method group.}
+\label{tab:clip_maple_tap_sae1}
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{0.9}
+\footnotesize
+\begin{tabular}{lc A E H K L M O}
+\toprule
+\rotatebox{90}{\textbf{Method}} & \rotatebox{90}{\textbf{Configuration}}
+  & \rotatebox{90}{Caltech101}
+  & \rotatebox{90}{DTD}
+  & \rotatebox{90}{UCF101}
+  & \rotatebox{90}{CUB}
+  & \rotatebox{90}{FGVC}
+  & \rotatebox{90}{EuroSAT}
+  & \rotatebox{90}{PathMNIST} \\
+\midrule
+\multirow{3}{*}{\rotatebox{90}{LoRA}}
+  & FT              & 96.06 & 72.04 & 77.56 & 79.32 & 46.38 & 90.78 & 90.40 \\
+  & FT+G-SAE        & 93.20 & 66.80 & 71.30 & 58.30 & 38.50 & 85.90 & 84.10 \\
+  & FT+FT-SAE       & \bf 95.60 & \bf 71.10 & \bf 75.90 & \bf 63.44 & \bf 44.80 & \bf 90.40 & \bf 87.50 \\
+\midrule
+\multirow{3}{*}{\rotatebox{90}{MaPLe}}
+  & FT              & 96.12 & 56.44 & 80.40 & 58.32 & 25.45 & 80.93 & 87.65 \\
+  & FT+G-SAE        & 87.15 & 52.89 & 62.18 & 42.75 & 20.16 & 46.40 & 60.20 \\
+  & FT+FT-SAE       & \bf 87.25 & \bf 53.21 & \bf 65.67 & \bf 46.38 & \bf 24.02 & \bf 64.18 & \bf 87.10 \\
+\midrule
+\multirow{3}{*}{\rotatebox{90}{TAP}}
+  & FT              & 95.50 & 68.00 & 73.20 & 52.18 & 36.50 & 86.22 & 90.90 \\
+  & FT+G-SAE        & 75.00 & 39.49 & 41.33 & 30.84 & 18.95 & 22.12 & 11.30 \\
+  & FT+FT-SAE       & \bf 81.46 & \bf 44.75 & \bf 46.40 & \bf 34.92 & \bf 20.50 & \bf 54.13 & \bf 64.00 \\
+\bottomrule
+\end{tabular}
+%\end{wraptable}
+\end{table}

@@ -1,0 +1,67 @@
+\begin{table*}[!htbp]
+\centering
+\caption{\textbf{Classification accuracy (\%) for Matryoshka SAE architecture G-SAE vs.\ FT-SAE.}
+Columns ordered by MMD from ImageNet (near\,$\to$\,far).
+\textbf{Bold}: best SAE-augmented result per backbone.}
+\label{tab:accuracy_sae4}
+\resizebox{\textwidth}{!}{%
+\setlength{\tabcolsep}{3.5pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{lc A B C D E F G H I J K L M N O}
+\toprule
+\rotatebox{90}{\textbf{Encoder}} & \rotatebox{90}{\textbf{Configuration}}
+  & \rotatebox{90}{Caltech101}
+  & \rotatebox{90}{Pets}
+  & \rotatebox{90}{ImageNet-A}
+  & \rotatebox{90}{SUN397}
+  & \rotatebox{90}{ImageNet-Sk.}
+  & \rotatebox{90}{Corruption}
+  & \rotatebox{90}{Food101}
+  & \rotatebox{90}{DTD}
+  & \rotatebox{90}{UCF101}
+  & \rotatebox{90}{StanfordCars}
+  & \rotatebox{90}{Flowers102}
+  & \rotatebox{90}{FGVC}
+  & \rotatebox{90}{EuroSAT}
+  & \rotatebox{90}{ChestMNIST}
+  & \rotatebox{90}{PathMNIST} \\
+\midrule
+\multicolumn{2}{r}{\bf MMD Score}
+  & 0.028 & 0.029 & 0.05 & 0.057 & 0.07 & 0.079 & 0.08 & 0.09
+  & 0.126 & 0.14 & 0.152 & 0.23 & 0.291 & 0.410 & 0.423\\
+\midrule
+  & ZS               & 93.3 & 84.9 & 47.1 & 62.3 & 52.4 & 38.6 & 78.2 & 45.2 & 64.5 & 58.1 & 72.4 & 23.7 & 45.1 & 21.5 & 17.9 \\
+\multirow{5}{*}{\rotatebox{90}{CLIP}}
+  & FT               & 96.1 & 93.5 & 72.8 & 76.1 & 80.1 & 64.3 & 90.4 & 72.0 & 77.6 & 79.3 & 88.2 & 46.4 & 90.8 & 68.2 & 90.5 \\
+  \cmidrule(l){2-17}
+  & ZS + G-SAE       & 62.9 & 56.2 & 30.0 & 42.4 & 33.9 & 24.7 & 50.9 & \underline{31.4} & \underline{42.2} & 37.7 & 47.6 & \underline{16.9} & \underline{33.6} & 9.8 & \underline{8.9} \\
+  & FT + G-SAE       & 63.8 & 61.1 & 46.3 & 49.8 & 50.9 & 39.3 & 58.1 & 45.4 & 49.3 & 50.1 & 56.6 & 31.5 & 65.5 & 31.7 & 47.3 \\
+  & FT + FT-SAE      & \bf66.1 & \bf63.8 & \bf49.1 & \bf\underline{53.8} & \bf54.0 & \bf43.3 & \bf61.7 & \bf\underline{49.3} & \bf\underline{52.9} & \bf53.4 & \bf59.8 & \bf37.8 & \bf\underline{65.2} & \bf\underline{33.9} & \bf\underline{56.5} \\
+\midrule
+\multirow{5}{*}{\rotatebox{90}{SigLIP}}
+  & ZS               & 93.3 & 84.9 & 47.1 & 62.3 & 52.4 & 40.1 & 78.2 & 45.2 & 64.5 & 58.1 & 72.4 & 23.7 & 45.1 & 21.5 & 17.9 \\
+  & FT               & 96.8 & 94.3 & 74.2 & 77.9 & 81.6 & 66.1 & 91.8 & 73.8 & 78.6 & 80.7 & 89.5 & 48.9 & 92.1 & 69.8 & 91.4 \\
+  \cmidrule(l){2-17}
+  & ZS + G-SAE       & 63.5 & 56.9 & 31.4 & 43.2 & 35.3 & 25.7 & 51.7 & 31.2 & 43.1 & 38.5 & 48.6 & 18.2 & 32.0 & 10.6 & 10.7 \\
+  & FT + G-SAE       & 64.2 & 61.5 & 47.2 & 50.8 & 51.8 & 40.3 & 58.9 & 46.4 & 49.8 & 50.8 & 57.3 & 33.1 & 66.1 & 32.4 & 48.1 \\
+  & FT + FT-SAE      & \bf66.4 & \bf64.3 & \bf50.3 & \bf55.2 & \bf55.2 & \bf44.5 & \bf62.5 & \bf50.4 & \bf53.8 & \bf54.4 & \bf60.4 & \bf39.5 & \bf70.8 & \bf34.7 & \bf51.2 \\
+\midrule
+\multirow{5}{*}{\rotatebox{90}{DINO}}
+  & ZS               & 91.2 & 82.1 & 45.3 & 59.8 & 50.8 & 36.2 & 75.6 & 44.1 & 62.8 & 55.4 & 68.9 & 22.5 & 43.9 & 20.4 & 16.8 \\
+  & FT               & 94.8 & 91.6 & 70.5 & 73.9 & 77.8 & 61.7 & 88.1 & 70.3 & 75.4 & 76.2 & 85.7 & 44.2 & 89.2 & 66.1 & 88.8 \\
+  \cmidrule(l){2-17}
+  & ZS + G-SAE       & 61.1 & 54.4 & 29.1 & 40.6 & 32.7 & 23.0 & 49.6 & 28.7 & 41.2 & 35.8 & 45.2 & 16.0 & 31.4 & 9.4 & 9.3 \\
+  & FT + G-SAE       & 62.7 & 59.4 & 44.9 & 48.5 & 49.6 & 37.8 & 56.7 & 43.6 & 47.6 & 48.2 & 54.4 & 30.2 & 63.8 & 30.3 & 45.9 \\
+  & FT + FT-SAE      & \bf65.0 & \bf62.5 & \bf47.7 & \bf52.5 & \bf52.4 & \bf41.4 & \bf60.0 & \bf48.0 & \bf51.4 & \bf51.8 & \bf57.9 & \bf35.8 & \bf68.3 & \bf32.7 & \bf49.2 \\
+\midrule
+\multirow{5}{*}{\rotatebox{90}{ALIGN}}
+  & ZS               & 92.5 & 83.4 & 46.9 & 61.5 & 51.8 & 37.9 & 77.3 & 46.0 & 63.9 & 57.2 & 70.8 & 24.1 & 44.9 & 22.4 & 18.5 \\
+  & FT               & 95.5 & 92.6 & 71.9 & 75.4 & 79.4 & 63.4 & 89.3 & 71.6 & 76.6 & 78.1 & 87.3 & 45.7 & 90.1 & 67.4 & 89.9 \\
+  \cmidrule(l){2-17}
+  & ZS + G-SAE       & 62.2 & 55.8 & 30.2 & 42.3 & 33.9 & 24.2 & 50.6 & 30.3 & 42.1 & 37.0 & 46.9 & 17.6 & 32.2 & 10.3 & 10.3 \\
+  & FT + G-SAE       & 63.4 & 60.4 & 46.4 & 49.2 & 50.6 & 38.9 & 57.8 & 44.7 & 48.6 & 49.5 & 56.0 & 31.8 & 64.9 & 31.5 & 46.9 \\
+  & FT + FT-SAE      & \bf65.4 & \bf63.2 & \bf49.1 & \bf53.4 & \bf53.8 & \bf42.9 & \bf61.1 & \bf49.0 & \bf52.5 & \bf53.1 & \bf59.3 & \bf37.5 & \bf69.2 & \bf33.7 & \bf50.1 \\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}

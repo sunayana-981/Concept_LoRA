@@ -1,0 +1,27 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{The decision rule applied to the eight development domains.}
+Predictions are leave-one-domain-out, i.e.\ each row is predicted by a model refit
+without that row. The retrain/reuse threshold is the $3.65$\,pp ImageNet
+self-degradation floor of Table~\ref{tab:imagenet_baseline}. The rule agrees with the
+observed call in $7/8$ domains; the single miss (Oxford~Pets) is a false positive,
+recommending retraining where reuse would have sufficed, which is the safer direction
+of error.}
+\label{tab:decision_rule}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Dataset} & \textbf{Observed degrad.\ (pp)} & \textbf{LODO-predicted (pp)} & \textbf{Call correct?} \\
+\midrule
+caltech101   & 1.33  & $-0.52$ & $\surd$\ (both: reuse) \\
+oxford\_pets & 3.56  & 5.77  & $\times$\ (predicts retrain) \\
+eurosat      & 4.00  & 6.33  & $\surd$\ (both: retrain) \\
+ucf101       & 4.89  & 5.66  & $\surd$\ (both: retrain) \\
+dtd          & 5.33  & 6.10  & $\surd$\ (both: retrain) \\
+pathmnist    & 11.55 & 10.09 & $\surd$\ (both: retrain) \\
+cub2002011   & 13.78 & 19.03 & $\surd$\ (both: retrain) \\
+fgvc         & 14.22 & 9.44  & $\surd$\ (both: retrain) \\
+\bottomrule
+\end{tabular}
+\end{table}

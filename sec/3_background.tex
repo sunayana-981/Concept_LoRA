@@ -1,0 +1,290 @@
+
+In this paper, we study the impact on interpretability of adapting a Large Pre-Trained Model $L$ using an adapter $A$ using a mechanistic interpretability tool $S$. Practically, we restrict attention to visual encoders CLIP, SigLIP and ALIGN that are part of LVMs and DINO which is a pure vision encoder. We restrict this study to Sparse Auto-Encoders (SAEs) for interpretability and to LoRA, DoRA, MaPLe, and TAP as adapters. We believe our conclusions will hold for other combinations of encoders, adapters and interpretability tools.
+
+An LPTM $L$ is adapted to a new dataset using an adapter $A$ to yield $\hat{L}$. $S_L$ is an SAE trained on activations of a specific layer of $L$. $S_L(x)$ is its decoder output for input $x$ and $S_L^E(x)$ is its {\em encoding} at the bottleneck layer. An image $I$ is transformed to $L(I)$ by the model and maps to $S_L(L(I))$ by the SAE.
+
+SAEs trained using large, pretraining-like corpus can capture a generic dictionary. They could be rich enough to explain an adapted $\hat L$. We call this a {\em Generic SAE}, denoted by $\bar S_L$. $S_{\hat L}$ is an SAE trained on the adapted model. We call this a {\em Specific SAE}, denoted by $S_{\hat L}$. We explore the explainability of $\bar S_L$ and $S_{\hat L}$ using several standard metrics to understand the behavior of Generic SAE and Specific SAEs as the distribution moves farther from the corpus.
+
+We study different metrics to analyze interpretability while using adapters. $S_L$ and $S_{\hat{L}}$ trained before and after adaptation. Specifically, we ask the question: can concepts learned by $S_L$ explain how the adapted model $\hat L$ behaves? We study different metrics on $S_L(L(I)$), $S_L(\hat{L}(I))$ and $S_{\hat L}(\hat{L}(I))$.
+
+\begin{table}[h]
+    \centering
+    \begin{tabular}{|c||c|c|c|c|c|}
+    \hline
+        LPTM & CLIP & SigLIP & DINO & ALIGN & \\
+    \hline
+        Adapter & LoRA & DoRA & MaPLe & TAP & \\
+    \hline
+        SAEs & Gated & Top-K & Matryoshka && \\
+    \hline
+    \end{tabular}
+    \caption{Configurations explored}
+    \label{configTable}
+\end{table}
+
+We study the behavior under different combinations of LPTMs, adapters and SAEs as given in Table \ref{configTable}. Experiments are carried out on datasets commonly used for doman adaptation and domain generalization literature. The datasets are given in Table \ref{datasetTable}.
+
+
+\begin{table}[h]
+    \centering
+    \begin{tabular}{|c|c|c|}
+    \hline
+       NaturalShift  &  & \\
+    \hline
+       Medical  &  & \\
+    \hline
+       Others  &  & \\
+    \hline
+    \end{tabular}
+    \caption{Caption}
+    \label{datasetTable}
+\end{table}
+
+
+\subsection{Tool: sparse autoencoders across architectures}
+\label{sec:method-tool}
+
+Rather than committing to a single SAE architecture, we sweep across
+several variants---ReLU, Top-$k$, Gated, Matryoshka, and PatchSAE---to
+test whether our conclusions about SAE behaviour under adaptation hold
+across dictionary-learning design choices rather than being artefacts of
+one parameterisation. Each variant trades off sparsity control, stability,
+and feature granularity differently, and a finding that survives this
+sweep is a finding about adaptation itself rather than about a particular
+objective. We foreground PatchSAE in the exposition because it operates
+on patch tokens and therefore supports both local analysis---textures,
+artefacts, acquisition noise that dominate many domain shifts---and their
+global composition into semantic categories; the remaining variants are
+trained and evaluated under the same protocol and reported alongside.
+
+\paragraph{Common skeleton.}
+All variants share a linear encoder, a nonlinearity $\sigma(\cdot)$, and
+a linear decoder trained to reconstruct hooked ViT token activations. Let
+$z \in \mathbb{R}^d$ be a hooked token vector (CLS or patch) at layer
+$\ell$, and let $d_{\mathrm{SAE}} \gg d$ be the overcomplete latent
+dimension. The general form is
+\begin{equation}
+\mathrm{SAE}(z) \;=\; W_D^{\top}\,h(z) + b_D,
+\qquad
+h(z) \;=\; \sigma\!\left(W_E^{\top}(z - b_D) + b_E\right)
+\in \mathbb{R}^{d_{\mathrm{SAE}}}_{\geq 0},
+\label{eq:sae-general}
+\end{equation}
+where $W_E \in \mathbb{R}^{d \times d_{\mathrm{SAE}}}$,
+$W_D \in \mathbb{R}^{d_{\mathrm{SAE}} \times d}$, and $b_E, b_D$ are
+bias terms. The variants differ in the choice of $\sigma$ and in the
+sparsity-inducing term added to the reconstruction loss.
+
+\paragraph{ReLU SAE~\citep{cunningham2024sparse}.}
+The simplest variant uses $\sigma = \mathrm{ReLU}$ with an $\ell_1$
+penalty on the latent activations:
+\begin{equation}
+\mathcal{L}_{\mathrm{ReLU}}
+\;=\;
+\|\mathrm{SAE}(z) - z\|_2^2
+\;+\;
+\lambda_{\ell_1}\,\|h(z)\|_1.
+\label{eq:relu-sae}
+\end{equation}
+The nonnegative parameterisation is easy to optimise but can leave a
+fraction of latents dead or underutilised.
+
+\paragraph{Top-$k$ SAE~\citep{gao2025scaling}.}
+Top-$k$ SAEs impose exact sparsity by retaining only the $k$ largest
+pre-activations and zeroing the rest:
+\begin{equation}
+h(z) \;=\; \mathrm{TopK}_{k}\!\left(W_E^{\top}(z - b_D) + b_E\right),
+\label{eq:topk-sae}
+\end{equation}
+where $\mathrm{TopK}_{k}(\cdot)$ keeps the $k$ entries with the largest
+values and sets the remainder to zero. No explicit sparsity term is
+needed, so the loss reduces to reconstruction alone:
+\begin{equation}
+\mathcal{L}_{\mathrm{TopK}} \;=\; \|\mathrm{SAE}(z) - z\|_2^2.
+\label{eq:topk-loss}
+\end{equation}
+
+\paragraph{Gated SAE~\citep{rajamanoharan2024improving}.}
+Gated SAEs decouple the decision \emph{whether} a latent fires from the
+decision \emph{how strongly} it fires, using separate gating and
+magnitude pathways that share a tied encoder direction. Writing
+$\pi(z) = W_E^{\top}(z - b_D)$, the gated activation is
+\begin{equation}
+h_{\mathrm{gate}}(z)
+\;=\;
+\mathbb{1}\!\left(\pi(z) + b_{\mathrm{gate}} > 0\right)
+\odot
+\mathrm{ReLU}\!\left(\exp(r)\odot\pi(z) + b_{\mathrm{mag}}\right),
+\label{eq:gated-sae}
+\end{equation}
+where $r \in \mathbb{R}^{d_{\mathrm{SAE}}}$ is a learned rescaling and
+$b_{\mathrm{gate}}, b_{\mathrm{mag}}$ are bias terms. The loss combines
+reconstruction, an $\ell_1$ penalty on the gate pre-activation, and an
+auxiliary reconstruction term that prevents the gate path from collapsing:
+\begin{equation}
+\mathcal{L}_{\mathrm{Gated}}
+\;=\;
+\|\mathrm{SAE}(z) - z\|_2^2
+\;+\;
+\lambda_{\ell_1}\,\|\mathrm{ReLU}(\pi(z) + b_{\mathrm{gate}})\|_1
+\;+\;
+\|\hat{z}_{\mathrm{gate}}(z) - z\|_2^2,
+\label{eq:gated-loss}
+\end{equation}
+where $\hat{z}_{\mathrm{gate}}$ is the reconstruction produced using only
+the gate pathway. This decoupling improves stability and reduces
+feature-shrinkage bias relative to ReLU SAEs.
+
+\paragraph{Matryoshka SAE~\citep{bussmann2025learning,zaremba2025interpreting}.}
+Matryoshka SAEs enforce a nested hierarchy on the dictionary by training
+a sequence of prefix-truncated reconstructions. Given an ordered set of
+prefix sizes $m_1 < m_2 < \cdots < m_M = d_{\mathrm{SAE}}$, let
+$h_{1:m}(z) \in \mathbb{R}^{d_{\mathrm{SAE}}}$ denote the latent vector
+with only its first $m$ entries retained and the rest zeroed. The loss
+sums reconstruction and sparsity terms over all prefixes:
+\begin{equation}
+\mathcal{L}_{\mathrm{Mat}}
+\;=\;
+\sum_{k=1}^{M} \alpha_k
+\left[
+\left\|W_D^{\top} h_{1:m_k}(z) + b_D - z\right\|_2^2
++ \lambda_{\ell_1}\,\|h_{1:m_k}(z)\|_1
+\right],
+\label{eq:matryoshka-loss}
+\end{equation}
+with weights $\alpha_k > 0$. The earliest latents are pressured to carry
+coarse, broadly-used structure and later latents to refine it, yielding a
+multi-granularity dictionary.
+
+\paragraph{PatchSAE~\citep{lim2024sparse}.}
+PatchSAE uses the ReLU objective of Eq.~\eqref{eq:relu-sae} but is
+trained on \emph{patch tokens} rather than only the CLS token, so each
+latent is a detector defined over the full $N \times d$ patch grid. This
+matters for our setting because domain shifts often manifest locally
+(texture, artefact, acquisition noise) and only aggregate into a
+semantic category through composition across patches. For image-level
+analysis under the PatchSAE variant, we threshold token-wise activations:
+for neuron $s$ on image $i$, patch-level and image-level activation
+counts are
+\begin{equation}
+a_{ij}[s] \;=\; \mathbb{1}\!\left(h_{ij}[s] > \tau\right),
+\qquad
+a_i[s] \;=\; \sum_{j=1}^{N} a_{ij}[s],
+\label{eq:activation-counts}
+\end{equation}
+for a small threshold $\tau > 0$. These counts define top-activating
+images per neuron and support the dataset- and class-level summaries used
+in the diagnostics of Section~\ref{sec:method-tests}. The other variants
+are applied to CLS-token activations under their respective losses and
+share the rest of the training protocol.
+
+\subsection{Procedure: paired SAE training and cross-evaluation}
+\label{sec:method-procedure}
+
+The standard PatchSAE protocol trains a single SAE on ImageNet activations
+from the base model and reuses it across downstream datasets---treating
+cross-domain reuse as a silent assumption. Our procedure turns that
+assumption into a testable claim. For every (encoder, adapter, dataset)
+triple, we train two SAEs under identical hyperparameters:
+\begin{enumerate}
+    \item a \emph{base SAE} $S_L$ on activations $H^{\ell}(x)$ from the
+          frozen encoder $L$, and
+    \item an \emph{adapted SAE} $S_{\hat{L}}$ on activations
+          $\hat{H}^{\ell}(x)$ from the adapted encoder $\hat{L}$.
+\end{enumerate}
+We then evaluate three decomposition pipelines on each dataset:
+$S_L(L(I))$ (base SAE on base model---the reference),
+$S_L(\hat{L}(I))$ (base SAE on adapted model---the reuse assumption), and
+$S_{\hat{L}}(\hat{L}(I))$ (adapted SAE on adapted model---the oracle). The
+gap between the second and third pipelines quantifies \emph{how much the
+SAE itself must adapt} for the dictionary to remain faithful; the gap
+between the first and second quantifies \emph{how far adaptation pushes
+activations off the base dictionary}.
+
+\subsection{Discovery tests: diagnostics that reveal SAE degradation}
+\label{sec:method-tests}
+
+To characterise the gap along multiple axes, we compute four representation
+checks on each pipeline, each grounded in prior SAE literature rather than
+introduced ad hoc.
+
+\paragraph{(1) Predictive utility.}
+Can class-discriminative information still be read out from the SAE code?
+Following PatchSAE, we report classification accuracy obtained by replacing
+the encoder's intermediate activations with their SAE reconstruction (or
+equivalently, by using aggregated image-level SAE features as input to a
+lightweight classifier). A drop relative to the oracle pipeline indicates
+the dictionary no longer carries the information the adapted model uses.
+
+\paragraph{(2) Reconstruction fidelity.}
+The mean squared reconstruction error
+\begin{equation}
+E_{\mathrm{rec}} \;=\; \mathbb{E}\!\left[\|\mathrm{SAE}(z) - z\|_2^2\right]
+\label{eq:recon-error}
+\end{equation}
+measured on held-out activations directly tests whether the basis spans the
+representation. A high $E_{\mathrm{rec}}$ for $S_L(\hat{L}(I))$ with a low
+$E_{\mathrm{rec}}$ for $S_{\hat{L}}(\hat{L}(I))$ is a direct signature of
+dictionary drift.
+
+\paragraph{(3) Sparsity and usage.}
+For each latent $s$, we track two quantities from SAE: the activated
+frequency
+\begin{equation}
+\mathrm{Freq}[s]
+\;=\;
+\frac{\left|\{i \in \mathcal{I} : h_i[s] > 0\}\right|}{|\mathcal{I}|},
+\label{eq:freq}
+\end{equation}
+and the mean activation among activated samples,
+\begin{equation}
+\mathrm{MeanAct}[s]
+\;=\;
+\frac{1}{\left|\{i \in \mathcal{I} : h_i[s] > 0\}\right|}
+\sum_{\substack{i \in \mathcal{I} \\ h_i[s] > 0}} h_i[s].
+\label{eq:meanact}
+\end{equation}
+These give an auditable usage profile: adaptation may induce dead features,
+diffuse activations, or concentration on a narrower set of latents.
+
+\paragraph{(4) Selectivity.}
+We measure how cleanly top-activating images for a latent align with a
+single concept using two complementary scores.
+
+\emph{Label entropy.} For latent $s$ with reference set $R_s$ (top-$k$
+images by image-level activation), let
+$\mathrm{sum}_c = \sum_{i \in R_s : y_i = c} h_i[s]$ and
+$p_c = \mathrm{sum}_c / \sum_{c' \in \mathcal{C}} \mathrm{sum}_{c'}$. Then
+\begin{equation}
+\mathrm{Ent}[s]
+\;=\;
+-\sum_{c \in \mathcal{C}} p_c \log p_c.
+\label{eq:entropy}
+\end{equation}
+Entropy near zero indicates the latent concentrates on a single label.
+
+\emph{Monosemanticity.} Let $x_i$ be the CLIP image embedding of image $i$
+and $z_i^{h} \geq 0$ the activation of latent $h$ on $i$. Weighting each
+image pair by $w_{ij}^{h} = z_i^{h} z_j^{h}$,
+\begin{equation}
+\mathrm{MS}_h
+\;=\;
+\frac{\sum_{i<j} w_{ij}^{h} \cos(x_i, x_j)}{\sum_{i<j} w_{ij}^{h}}.
+\label{eq:monosemanticity}
+\end{equation}
+Pairs where the latent fires strongly on both images dominate the weighted
+average; pairs where it is inactive on at least one contribute zero. High
+$\mathrm{MS}_h$ indicates the latent fires on a semantically coherent set.
+
+We summarise each metric over the top-$K$ latents (we use $K = 10$) to
+match reporting in Section~\ref{sec:experiments}.
+
+\paragraph{Putting the tests together.}
+The four checks probe complementary failure modes: classification tests
+whether the basis is still \emph{usable}, reconstruction tests whether it
+is still \emph{sufficient}, sparsity tests whether it is still
+\emph{structured}, and entropy and monosemanticity test whether it is
+still \emph{selective}. A base-SAE dictionary that survives adaptation
+should score comparably on $S_L(\hat{L}(I))$ and $S_{\hat{L}}(\hat{L}(I))$
+across all four; a dictionary that breaks down under adaptation will
+diverge on at least one, and the pattern of divergence tells us how.

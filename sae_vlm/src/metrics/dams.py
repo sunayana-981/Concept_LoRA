@@ -23,8 +23,17 @@ Decomposes SAE quality under domain shift into three components:
      concept, max-aggregated over features.  Measures whether each concept
      has a dedicated, non-shared region of feature space.
 
+  4. Domain Alignment Score (DAS) — class-balanced kernel target alignment
+     between SAE concept activations and target-domain labels.  Measures
+     whether concept geometry is statistically dependent on the domain class
+     partition.
+
+  5. SAE Utility Score (SUS) — cross-validated, chance-normalised balanced
+     accuracy of a ridge readout on frozen SAE activations.  Measures whether
+     the frozen concept representation is actually useful for this dataset.
+
 Composite:
-    DAMS = EC × (α × CSS_norm + β × FSS)
+    DAMS = EC^rho × (α × CSS_norm + β × FSS + γ × DAS)
 
 Usage (as library):
     from src.metrics.dams import compute_dams, DAMSResult
@@ -61,12 +70,14 @@ from tqdm import tqdm
 class DAMSResult:
     """Stores all DAMS sub-metrics and the composite score.
 
-    DAMS = EC × (α × CSS_norm + β × FSS)
+    DAMS = EC^rho × (α × CSS_norm + β × FSS + γ × DAS)
 
     Component mapping (default new metrics):
         EC        — CKA(X_cls, A_pool) with sigmoid kernel in concept space
         CSS_norm  — Normalised inter-class MMD in SAE concept space
         FSS       — Entropy-based feature specificity (raw activation weights)
+        DAS       — Class-balanced CKA(A_pool, Y), a normalized HSIC dependence
+                    score between SAE concept geometry and target-domain labels
     """
 
     # --- Component scores ---
@@ -77,11 +88,20 @@ class DAMSResult:
     css_metric: str      # 'mmd' | 'fisher'
     fss: float           # FSS ∈ [0, 1]  (feature specificity)
     fss_method: str      # 'entropy' | 'threshold'
+    das: float           # DAS ∈ [0, 1]  (domain/label dependence)
+    das_metric: str
+    utility: float       # SUS ∈ [0, 1]  (chance-normalised readout utility)
+    utility_balanced_acc: float
+    utility_chance: float
+    utility_metric: str
 
     # --- Composite ---
     alpha: float
     beta: float
-    dams: float          # EC × (α × CSS_norm + β × FSS)
+    gamma: float
+    coverage_power: float
+    coverage_gate: float
+    dams: float          # EC^rho × (alpha × CSS_norm + beta × FSS + gamma × DAS)
 
     # --- Diagnostics ---
     recon_mse_per_dim: float
@@ -105,7 +125,10 @@ class DAMSResult:
             f"  (MSE/dim={self.recon_mse_per_dim:.4f})",
             f"  CSS [{self.css_metric:<6}] raw/norm = {self.css_raw:.4f} / {self.css_norm:.4f}",
             f"  FSS [{self.fss_method:<9}]     = {self.fss:.4f}",
-            f"  α={self.alpha}, β={self.beta}",
+            f"  DAS [{self.das_metric:<9}]     = {self.das:.4f}",
+            f"  SUS [{self.utility_metric:<9}]     = {self.utility:.4f}"
+            f"  (bal_acc={self.utility_balanced_acc:.4f}, chance={self.utility_chance:.4f})",
+            f"  α={self.alpha}, β={self.beta}, γ={self.gamma}, ρ={self.coverage_power}",
             f"  n={self.n_samples}, C={self.n_classes}, d_sae={self.n_features}",
             f"  layer_match={self.layer_match}, ||b_dec||={self.b_dec_norm:.4f}",
             ")",
@@ -491,6 +514,984 @@ def compute_mmd_score(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 1d. Domain Alignment Score — class-balanced kernel target alignment
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _class_balanced_indices(
+    labels_t: torch.Tensor,
+    max_samples: int,
+    min_class_count: int = 2,
+) -> torch.Tensor:
+    """Deterministic class-balanced subsample for O(N^2) kernel metrics."""
+    valid_classes = []
+    for c in labels_t.unique(sorted=True).tolist():
+        idx_c = (labels_t == int(c)).nonzero(as_tuple=True)[0]
+        if idx_c.numel() >= min_class_count:
+            valid_classes.append((int(c), idx_c))
+
+    if not valid_classes:
+        return torch.empty(0, dtype=torch.long)
+
+    per_class = max(min_class_count, int(math.ceil(max_samples / len(valid_classes))))
+    chunks = [idx_c[:per_class] for _, idx_c in valid_classes]
+    idx = torch.cat(chunks, dim=0)
+    if idx.numel() > max_samples:
+        idx = idx[:max_samples]
+    return idx.sort().values
+
+
+def _balanced_label_kernel(labels_t: torch.Tensor) -> torch.Tensor:
+    """
+    Class-balanced label kernel.
+
+    Y_ic = 1/sqrt(n_c) if sample i belongs to class c, else 0.
+    K_Y = Y Y^T gives every class equal total mass, preventing common
+    classes from dominating the alignment.
+    """
+    classes, inverse = torch.unique(labels_t, sorted=True, return_inverse=True)
+    oh = F.one_hot(inverse, num_classes=len(classes)).float()
+    counts = oh.sum(dim=0).clamp(min=1.0)
+    Y = oh / counts.sqrt().unsqueeze(0)
+    return Y @ Y.T
+
+
+def _normalised_cka_from_grams(K: torch.Tensor, L: torch.Tensor) -> float:
+    Kc = _centre_gram(K)
+    Lc = _centre_gram(L)
+    hsic_kl = _hsic_from_grams(Kc, Lc)
+    hsic_kk = _hsic_from_grams(Kc, Kc)
+    hsic_ll = _hsic_from_grams(Lc, Lc)
+    denom = math.sqrt(max(hsic_kk, 0.0) * max(hsic_ll, 0.0))
+    if denom <= 1e-12:
+        return 0.0
+    return float(max(0.0, min(1.0, hsic_kl / denom)))
+
+
+@torch.no_grad()
+def compute_domain_alignment_score(
+    activations: torch.Tensor,
+    labels: List[int],
+    num_classes: int,
+    subsample: int = 2000,
+    min_class_count: int = 2,
+) -> float:
+    """
+    Domain Alignment Score (DAS): class-balanced CKA between SAE concept
+    activations and the target-domain label kernel.
+
+    DAS = CKA(K_A, K_Y)
+
+    K_A is a cosine kernel over log-compressed non-negative SAE activations.
+    K_Y is a class-balanced label kernel: samples in the same class are
+    similar, but each class contributes equal total mass. This is normalized
+    HSIC, so it has a direct dependence-testing interpretation:
+
+        DAS is high when the SAE concept geometry is statistically aligned
+        with the target-domain class partition.
+
+    Unlike EC, DAS does not reward merely preserving generic CLIP geometry.
+    Unlike raw separability, it is normalized and class-balanced.
+    """
+    labels_t = torch.tensor(labels, dtype=torch.long)
+    idx = _class_balanced_indices(labels_t, max_samples=subsample, min_class_count=min_class_count)
+    if idx.numel() < 4:
+        print("    [DAS] fewer than 4 balanced samples; returning 0")
+        return 0.0
+
+    A = torch.log1p(activations[idx].float().clamp(min=0.0))
+    y = labels_t[idx]
+
+    # Remove dead dimensions on the selected subset, then row-normalize.
+    keep = A.var(dim=0) > 1e-12
+    if keep.any():
+        A = A[:, keep]
+    A = F.normalize(A, p=2, dim=1, eps=1e-12)
+
+    K_A = A @ A.T
+    K_Y = _balanced_label_kernel(y)
+    das = _normalised_cka_from_grams(K_A, K_Y)
+
+    n_valid_classes = int(torch.unique(y).numel())
+    print(f"    [DAS] n={idx.numel()}, classes={n_valid_classes}/{num_classes}, "
+          f"d_eff={A.shape[1]}, CKA(K_A,K_Y)={das:.4f}")
+    return das
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1e. SAE Utility Score — frozen readout utility
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _balanced_accuracy_score(
+    y_true: torch.Tensor,
+    y_pred: torch.Tensor,
+    num_classes: int,
+) -> Tuple[float, int]:
+    recalls = []
+    for c in range(num_classes):
+        mask = y_true == c
+        if mask.any():
+            recalls.append(float((y_pred[mask] == c).float().mean().item()))
+    return (float(np.mean(recalls)) if recalls else 0.0, len(recalls))
+
+
+def _stratified_fold_indices(
+    labels_t: torch.Tensor,
+    n_splits: int,
+    min_class_count: int = 2,
+) -> List[Tuple[torch.Tensor, torch.Tensor]]:
+    """Deterministic stratified folds with rare classes kept when possible."""
+    folds: List[List[int]] = [[] for _ in range(n_splits)]
+    all_idx = torch.arange(labels_t.numel())
+
+    for c in labels_t.unique(sorted=True).tolist():
+        idx_c = (labels_t == int(c)).nonzero(as_tuple=True)[0]
+        if idx_c.numel() < min_class_count:
+            continue
+        for j, idx in enumerate(idx_c.tolist()):
+            folds[j % n_splits].append(int(idx))
+
+    split_pairs: List[Tuple[torch.Tensor, torch.Tensor]] = []
+    used = set()
+    for fold in folds:
+        if not fold:
+            continue
+        test_idx = torch.tensor(sorted(fold), dtype=torch.long)
+        used.update(test_idx.tolist())
+        test_mask = torch.zeros(labels_t.numel(), dtype=torch.bool)
+        test_mask[test_idx] = True
+        train_idx = all_idx[~test_mask]
+        if train_idx.numel() > 0:
+            split_pairs.append((train_idx, test_idx))
+
+    # If very rare classes were excluded from folds, they remain in training
+    # only. That keeps test balanced accuracy well-defined.
+    _ = used
+    return split_pairs
+
+
+def _prepare_readout_features(
+    activations: torch.Tensor,
+    train_idx: torch.Tensor,
+    test_idx: torch.Tensor,
+    top_features: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    weights = torch.log1p(activations.float().clamp(min=0.0))
+    X_train = weights[train_idx]
+    X_test = weights[test_idx]
+
+    if top_features > 0 and top_features < X_train.shape[1]:
+        # Unsupervised feature selection: high-variance SAE features carry
+        # more signal, while avoiding label leakage from the held-out fold.
+        var = X_train.var(dim=0)
+        keep = var.argsort(descending=True)[:top_features]
+        X_train = X_train[:, keep]
+        X_test = X_test[:, keep]
+
+    mu = X_train.mean(dim=0, keepdim=True)
+    sigma = X_train.std(dim=0, keepdim=True).clamp(min=1e-6)
+    X_train = (X_train - mu) / sigma
+    X_test = (X_test - mu) / sigma
+    return X_train, X_test
+
+
+@torch.no_grad()
+def compute_sae_utility_score(
+    activations: torch.Tensor,
+    labels: List[int],
+    num_classes: int,
+    n_splits: int = 3,
+    ridge: float = 1.0,
+    top_features: int = 4096,
+    min_class_count: int = 2,
+) -> Tuple[float, float, float]:
+    """
+    SAE Utility Score (SUS): can a simple frozen readout use this SAE?
+
+    For each deterministic stratified fold, train a closed-form ridge readout
+    on log-compressed SAE activations and evaluate balanced accuracy on held-out
+    examples. The reported score is chance-normalised:
+
+        SUS = clip((balanced_acc - chance) / (1 - chance), 0, 1)
+
+    where chance = 1 / (# classes represented in held-out folds).
+
+    This is intentionally not a monosemanticity score. It is a decision score:
+    if SUS is high for the base SAE, the frozen base representation is already
+    useful on the dataset; if adapted SUS improves materially, adaptation buys
+    practical value.
+    """
+    labels_t = torch.tensor(labels, dtype=torch.long)
+    split_pairs = _stratified_fold_indices(labels_t, n_splits=n_splits, min_class_count=min_class_count)
+    if not split_pairs:
+        print("    [SUS] no valid stratified folds; returning 0")
+        return 0.0, 0.0, 0.0
+
+    fold_bacc = []
+    fold_chance = []
+    eye_cache: Dict[int, torch.Tensor] = {}
+
+    for train_idx, test_idx in split_pairs:
+        X_train, X_test = _prepare_readout_features(
+            activations,
+            train_idx=train_idx,
+            test_idx=test_idx,
+            top_features=top_features,
+        )
+        y_train = labels_t[train_idx]
+        y_test = labels_t[test_idx]
+
+        Y = F.one_hot(y_train, num_classes=num_classes).float()
+        K = X_train @ X_train.T
+        n_train = K.shape[0]
+        if n_train not in eye_cache:
+            eye_cache[n_train] = torch.eye(n_train, dtype=K.dtype)
+        dual = torch.linalg.solve(K + ridge * eye_cache[n_train], Y)
+        W = X_train.T @ dual
+        logits = X_test @ W
+        y_pred = logits.argmax(dim=1)
+
+        bacc, n_eval_classes = _balanced_accuracy_score(y_test, y_pred, num_classes)
+        chance = 1.0 / max(n_eval_classes, 1)
+        fold_bacc.append(bacc)
+        fold_chance.append(chance)
+
+    balanced_acc = float(np.mean(fold_bacc)) if fold_bacc else 0.0
+    chance = float(np.mean(fold_chance)) if fold_chance else 0.0
+    utility = (balanced_acc - chance) / max(1.0 - chance, 1e-12)
+    utility = float(max(0.0, min(1.0, utility)))
+
+    print(
+        f"    [SUS] folds={len(split_pairs)}, top_features={top_features}, ridge={ridge}, "
+        f"balanced_acc={balanced_acc:.4f}, chance={chance:.4f}, utility={utility:.4f}"
+    )
+    return utility, balanced_acc, chance
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1f. Feature-level domain metrics — DAMS v4 components
+# ═══════════════════════════════════════════════════════════════════════════
+
+@torch.no_grad()
+def compute_feature_purity_score(
+    activations: torch.Tensor,
+    labels: List[int],
+    num_classes: int,
+    active_threshold: float = 0.0,
+    min_fire_count: int = 5,
+    min_fire_frac: float = 0.005,
+    chunk_size: int = 4096,
+) -> Tuple[float, Dict[str, float]]:
+    """
+    Feature Purity (FP): are active SAE features class-specific?
+
+    For each feature f with enough active samples, compute
+
+        purity(f) = 1 - H(Y | f active) / log(C_eff)
+
+    where C_eff is the number of represented labels in the evaluated subset.
+    The final score is the fire-count-weighted mean purity over supported
+    features. This is deliberately feature-level: generic features that fire
+    across many classes are penalised even if a downstream classifier can still
+    recover the label by combining many features.
+    """
+    labels_t = torch.tensor(labels, dtype=torch.long)
+    present_classes = labels_t.unique(sorted=True).tolist()
+    c_eff = len(present_classes)
+    if c_eff <= 1 or activations.numel() == 0:
+        return 0.0, {
+            "fp_supported_features": 0,
+            "fp_total_features": int(activations.shape[1]) if activations.ndim == 2 else 0,
+            "fp_effective_classes": c_eff,
+            "fp_mean_unweighted": 0.0,
+        }
+
+    class_masks = [(labels_t == int(c)).float() for c in present_classes]
+    weights = activations.float().clamp(min=0.0)
+    n_samples, n_features = weights.shape
+    min_fires = max(int(min_fire_count), int(math.ceil(min_fire_frac * n_samples)))
+    log_c = math.log(c_eff)
+    eps = 1e-10
+
+    weighted_purity_sum = 0.0
+    fire_weight_sum = 0.0
+    purity_sum = 0.0
+    supported_total = 0
+
+    for start in range(0, n_features, chunk_size):
+        end = min(start + chunk_size, n_features)
+        chunk = weights[:, start:end]
+        active = chunk > active_threshold
+        fire_count = active.float().sum(dim=0)
+        support = fire_count >= min_fires
+        if not support.any():
+            continue
+
+        active_f = active.float()
+        class_counts = torch.stack(
+            [(mask.to(active_f.device).unsqueeze(0) @ active_f).squeeze(0) for mask in class_masks],
+            dim=0,
+        )
+        p_y_given_f = class_counts / (fire_count.unsqueeze(0) + eps)
+        entropy = -(p_y_given_f * (p_y_given_f + eps).log()).sum(dim=0)
+        purity = (1.0 - entropy / log_c).clamp(0.0, 1.0)
+        purity = purity[support]
+        fires = fire_count[support]
+
+        weighted_purity_sum += float((purity * fires).sum().item())
+        fire_weight_sum += float(fires.sum().item())
+        purity_sum += float(purity.sum().item())
+        supported_total += int(support.sum().item())
+
+    fp = weighted_purity_sum / max(fire_weight_sum, eps)
+    stats = {
+        "fp_supported_features": supported_total,
+        "fp_total_features": int(n_features),
+        "fp_effective_classes": int(c_eff),
+        "fp_min_fires": int(min_fires),
+        "fp_fire_weight_sum": float(fire_weight_sum),
+        "fp_mean_unweighted": float(purity_sum / max(supported_total, 1)),
+    }
+    print(
+        f"    [FP] supported={supported_total}/{n_features}, min_fires={min_fires}, "
+        f"weighted_purity={fp:.4f}, unweighted={stats['fp_mean_unweighted']:.4f}"
+    )
+    return float(fp), stats
+
+
+@torch.no_grad()
+def compute_topk_feature_discriminability(
+    activations: torch.Tensor,
+    labels: List[int],
+    num_classes: int,
+    top_k: int = 200,
+    active_threshold: float = 0.0,
+    min_fire_count: int = 5,
+    min_fire_frac: float = 0.005,
+    min_pos: int = 2,
+    chunk_size: int = 2048,
+) -> Tuple[float, float, Dict[str, float]]:
+    """
+    Top-k Feature Discriminability (TFD): how good are the best feature detectors?
+
+    For every SAE feature, compute the best one-vs-rest rank AUC over represented
+    classes, then average the top-k features. AUC is computed with average ranks,
+    so ties from zero activations are handled correctly. Returned values are:
+
+        tfd_norm = clip((mean_topk_auc - 0.5) / 0.5, 0, 1)
+        mean_topk_auc
+        diagnostics
+
+    `tfd_norm` is the [0, 1] chance-normalised value used by composites, while
+    `mean_topk_auc` is easier to read as the raw detector quality.
+    """
+    try:
+        from scipy.stats import rankdata
+    except Exception as exc:  # pragma: no cover - dependency is available in env
+        raise ImportError("compute_topk_feature_discriminability requires scipy") from exc
+
+    labels_np = np.asarray(labels, dtype=np.int64)
+    present_classes = np.unique(labels_np)
+    n_samples, n_features = activations.shape
+    if n_samples < 3 or n_features == 0 or present_classes.size <= 1:
+        return 0.0, 0.5, {
+            "tfd_top_k": int(top_k),
+            "tfd_effective_classes": int(present_classes.size),
+            "tfd_supported_features": 0,
+            "tfd_features_auc_gt_0_8": 0,
+            "tfd_features_auc_gt_0_9": 0,
+        }
+
+    class_masks = []
+    for c in present_classes.tolist():
+        pos = labels_np == int(c)
+        n_pos = int(pos.sum())
+        n_neg = int(n_samples - n_pos)
+        if n_pos >= min_pos and n_neg >= min_pos:
+            class_masks.append((int(c), pos, n_pos, n_neg))
+
+    if not class_masks:
+        return 0.0, 0.5, {
+            "tfd_top_k": int(top_k),
+            "tfd_effective_classes": int(present_classes.size),
+            "tfd_supported_features": 0,
+            "tfd_features_auc_gt_0_8": 0,
+            "tfd_features_auc_gt_0_9": 0,
+        }
+
+    weights = activations.float().clamp(min=0.0).cpu()
+    min_fires = max(int(min_fire_count), int(math.ceil(min_fire_frac * n_samples)))
+    all_best_auc = []
+    supported_total = 0
+
+    for start in range(0, n_features, chunk_size):
+        end = min(start + chunk_size, n_features)
+        chunk = weights[:, start:end].numpy()
+        support = (chunk > active_threshold).sum(axis=0) >= min_fires
+        supported_total += int(support.sum())
+
+        # rankdata(method="average") gives exact Mann-Whitney AUC under ties.
+        ranks = rankdata(chunk, axis=0, method="average")
+        best_auc = np.full(chunk.shape[1], 0.5, dtype=np.float64)
+
+        for _class_id, pos_mask, n_pos, n_neg in class_masks:
+            rank_sum = ranks[pos_mask].sum(axis=0)
+            auc = (rank_sum - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+            best_auc = np.maximum(best_auc, auc)
+
+        best_auc[~support] = 0.5
+        all_best_auc.append(best_auc.astype(np.float32))
+
+    all_best_auc_np = np.concatenate(all_best_auc, axis=0)
+    k = min(max(int(top_k), 1), all_best_auc_np.size)
+    top_auc = np.partition(all_best_auc_np, -k)[-k:]
+    mean_topk_auc = float(top_auc.mean())
+    tfd_norm = float(np.clip((mean_topk_auc - 0.5) / 0.5, 0.0, 1.0))
+
+    stats = {
+        "tfd_top_k": int(k),
+        "tfd_effective_classes": int(present_classes.size),
+        "tfd_valid_ovr_classes": int(len(class_masks)),
+        "tfd_supported_features": int(supported_total),
+        "tfd_total_features": int(n_features),
+        "tfd_min_fires": int(min_fires),
+        "tfd_features_auc_gt_0_8": int((all_best_auc_np >= 0.8).sum()),
+        "tfd_features_auc_gt_0_9": int((all_best_auc_np >= 0.9).sum()),
+        "tfd_max_auc": float(all_best_auc_np.max()),
+    }
+    print(
+        f"    [TFD] top{k}_auc={mean_topk_auc:.4f}, norm={tfd_norm:.4f}, "
+        f"auc>=0.8={stats['tfd_features_auc_gt_0_8']}, supported={supported_total}/{n_features}"
+    )
+    return tfd_norm, mean_topk_auc, stats
+
+
+def _best_ovr_auc_for_indices(
+    weights: torch.Tensor,
+    labels_np: np.ndarray,
+    sample_idx: np.ndarray,
+    active_threshold: float,
+    min_fires: int,
+    min_pos: int,
+    chunk_size: int,
+) -> Tuple[np.ndarray, np.ndarray, int]:
+    """Return per-feature best one-vs-rest AUC and its selected class."""
+    from scipy.stats import rankdata
+
+    y = labels_np[sample_idx]
+    present_classes = np.unique(y)
+    class_masks = []
+    n = int(sample_idx.size)
+    for c in present_classes.tolist():
+        pos = y == int(c)
+        n_pos = int(pos.sum())
+        n_neg = n - n_pos
+        if n_pos >= min_pos and n_neg >= min_pos:
+            class_masks.append((int(c), pos, n_pos, n_neg))
+
+    n_features = int(weights.shape[1])
+    all_auc = []
+    all_class = []
+    supported_total = 0
+
+    for start in range(0, n_features, chunk_size):
+        end = min(start + chunk_size, n_features)
+        chunk = weights[sample_idx, start:end].numpy()
+        support = (chunk > active_threshold).sum(axis=0) >= min_fires
+        supported_total += int(support.sum())
+        ranks = rankdata(chunk, axis=0, method="average")
+
+        best_auc = np.full(chunk.shape[1], 0.5, dtype=np.float64)
+        best_class = np.full(chunk.shape[1], -1, dtype=np.int64)
+        for class_id, pos_mask, n_pos, n_neg in class_masks:
+            rank_sum = ranks[pos_mask].sum(axis=0)
+            auc = (rank_sum - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+            update = auc > best_auc
+            best_auc[update] = auc[update]
+            best_class[update] = class_id
+
+        best_auc[~support] = 0.5
+        best_class[~support] = -1
+        all_auc.append(best_auc.astype(np.float32))
+        all_class.append(best_class)
+
+    return np.concatenate(all_auc), np.concatenate(all_class), supported_total
+
+
+@torch.no_grad()
+def compute_cv_topk_feature_discriminability(
+    activations: torch.Tensor,
+    labels: List[int],
+    num_classes: int,
+    top_k: int = 200,
+    n_splits: int = 3,
+    active_threshold: float = 0.0,
+    min_fire_count: int = 5,
+    min_fire_frac: float = 0.005,
+    min_pos: int = 2,
+    chunk_size: int = 2048,
+) -> Tuple[float, float, Dict[str, float]]:
+    """
+    Cross-validated Top-k Feature Discriminability.
+
+    Raw top-k AUC over 49k features can overfit badly: with enough features, both
+    base and adapted SAEs can produce apparently perfect top detectors on the
+    same samples used for selection. This held-out version selects feature/class
+    detectors by train-fold AUC, then evaluates those detectors on the held-out
+    fold. It measures generalisable concept detectors rather than lucky spikes.
+    """
+    try:
+        from scipy.stats import rankdata
+    except Exception as exc:  # pragma: no cover
+        raise ImportError("compute_cv_topk_feature_discriminability requires scipy") from exc
+
+    labels_t = torch.tensor(labels, dtype=torch.long)
+    split_pairs = _stratified_fold_indices(labels_t, n_splits=n_splits, min_class_count=max(2, min_pos))
+    if not split_pairs:
+        return 0.0, 0.5, {
+            "tfd_top_k": int(top_k),
+            "tfd_cv_folds": 0,
+            "tfd_features_auc_gt_0_8": 0,
+            "tfd_features_auc_gt_0_9": 0,
+            "tfd_supported_features": 0,
+        }
+
+    weights = activations.float().clamp(min=0.0).cpu()
+    labels_np = np.asarray(labels, dtype=np.int64)
+    n_samples, n_features = weights.shape
+    min_fires = max(int(min_fire_count), int(math.ceil(min_fire_frac * n_samples)))
+
+    fold_auc_means = []
+    fold_auc_ge_08 = []
+    fold_auc_ge_09 = []
+    supported_counts = []
+    valid_detector_counts = []
+
+    for train_idx_t, test_idx_t in split_pairs:
+        train_idx = train_idx_t.cpu().numpy()
+        test_idx = test_idx_t.cpu().numpy()
+        train_auc, train_class, supported = _best_ovr_auc_for_indices(
+            weights=weights,
+            labels_np=labels_np,
+            sample_idx=train_idx,
+            active_threshold=active_threshold,
+            min_fires=max(2, min(min_fires, int(train_idx.size))),
+            min_pos=min_pos,
+            chunk_size=chunk_size,
+        )
+        supported_counts.append(supported)
+
+        k = min(max(int(top_k), 1), train_auc.size)
+        selected = np.argpartition(train_auc, -k)[-k:]
+        selected = selected[np.argsort(train_auc[selected])[::-1]]
+        selected_class = train_class[selected]
+
+        valid_selection = selected_class >= 0
+        selected = selected[valid_selection]
+        selected_class = selected_class[valid_selection]
+        if selected.size == 0:
+            continue
+
+        test_scores = weights[test_idx][:, selected].numpy()
+        y_test = labels_np[test_idx]
+        ranks = rankdata(test_scores, axis=0, method="average")
+        test_auc = np.full(selected.size, np.nan, dtype=np.float64)
+
+        for class_id in np.unique(selected_class).tolist():
+            cols = selected_class == int(class_id)
+            pos = y_test == int(class_id)
+            n_pos = int(pos.sum())
+            n_neg = int(y_test.size - n_pos)
+            if n_pos < 1 or n_neg < 1:
+                continue
+            rank_sum = ranks[pos][:, cols].sum(axis=0)
+            auc = (rank_sum - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg)
+            test_auc[cols] = auc
+
+        valid_auc = test_auc[np.isfinite(test_auc)]
+        if valid_auc.size == 0:
+            continue
+        fold_auc_means.append(float(valid_auc.mean()))
+        fold_auc_ge_08.append(int((valid_auc >= 0.8).sum()))
+        fold_auc_ge_09.append(int((valid_auc >= 0.9).sum()))
+        valid_detector_counts.append(int(valid_auc.size))
+
+    if not fold_auc_means:
+        return 0.0, 0.5, {
+            "tfd_top_k": int(top_k),
+            "tfd_cv_folds": 0,
+            "tfd_features_auc_gt_0_8": 0,
+            "tfd_features_auc_gt_0_9": 0,
+            "tfd_supported_features": int(np.mean(supported_counts)) if supported_counts else 0,
+        }
+
+    mean_topk_auc = float(np.mean(fold_auc_means))
+    tfd_norm = float(np.clip((mean_topk_auc - 0.5) / 0.5, 0.0, 1.0))
+    stats = {
+        "tfd_top_k": int(top_k),
+        "tfd_cv_folds": int(len(fold_auc_means)),
+        "tfd_supported_features": int(np.mean(supported_counts)) if supported_counts else 0,
+        "tfd_total_features": int(n_features),
+        "tfd_min_fires": int(min_fires),
+        "tfd_valid_detectors": float(np.mean(valid_detector_counts)) if valid_detector_counts else 0.0,
+        "tfd_features_auc_gt_0_8": float(np.mean(fold_auc_ge_08)) if fold_auc_ge_08 else 0.0,
+        "tfd_features_auc_gt_0_9": float(np.mean(fold_auc_ge_09)) if fold_auc_ge_09 else 0.0,
+        "tfd_fold_auc_std": float(np.std(fold_auc_means)) if len(fold_auc_means) > 1 else 0.0,
+    }
+    print(
+        f"    [TFD-cv] top{top_k}_heldout_auc={mean_topk_auc:.4f}, norm={tfd_norm:.4f}, "
+        f"auc>=0.8/fold={stats['tfd_features_auc_gt_0_8']:.1f}, folds={len(fold_auc_means)}"
+    )
+    return tfd_norm, mean_topk_auc, stats
+
+
+@torch.no_grad()
+def compute_activation_hoyer_sparsity(
+    activations: torch.Tensor,
+    eps: float = 1e-12,
+) -> Tuple[float, Dict[str, float]]:
+    """
+    Mean Hoyer sparsity of SAE activations per sample.
+
+    Hoyer(x) = (sqrt(d) - ||x||_1 / ||x||_2) / (sqrt(d) - 1)
+
+    It is 0 for dense/uniform activations and approaches 1 for one-sparse
+    activations. A matched SAE should often produce a cleaner, sparser code on
+    the same target-model features.
+    """
+    x = activations.float().clamp(min=0.0)
+    if x.ndim != 2 or x.numel() == 0:
+        return 0.0, {"hoyer_sparsity_std": 0.0, "active_features_per_sample": 0.0}
+
+    d = x.shape[1]
+    l1 = x.sum(dim=1)
+    l2 = x.norm(p=2, dim=1).clamp(min=eps)
+    sparsity = ((math.sqrt(d) - (l1 / l2)) / max(math.sqrt(d) - 1.0, eps)).clamp(0.0, 1.0)
+    active_per_sample = (x > 0).float().sum(dim=1)
+    stats = {
+        "hoyer_sparsity_std": float(sparsity.std(unbiased=False).item()),
+        "active_features_per_sample": float(active_per_sample.mean().item()),
+        "active_features_per_sample_std": float(active_per_sample.std(unbiased=False).item()),
+    }
+    score = float(sparsity.mean().item())
+    print(
+        f"    [Hoyer] sparsity={score:.4f}, active/sample={stats['active_features_per_sample']:.1f}"
+    )
+    return score, stats
+
+
+def _image_level_features_from_tokens(
+    features: torch.Tensor,
+    token_mode: str,
+) -> torch.Tensor:
+    if features.ndim != 3:
+        return features.float().cpu()
+    if token_mode == "cls":
+        return features[:, 0, :].float().cpu()
+    if token_mode == "mean_patch":
+        return features[:, 1:, :].mean(dim=1).float().cpu()
+    if token_mode == "mean_all":
+        return features.mean(dim=1).float().cpu()
+    raise ValueError(f"Unknown token_mode={token_mode!r}; expected cls|mean_patch|mean_all")
+
+
+@torch.no_grad()
+def _reconstruct_image_level_features(
+    sae,
+    features: torch.Tensor,
+    device: str,
+    batch_size: int,
+    token_mode: str,
+) -> torch.Tensor:
+    if features.ndim != 3:
+        recon_batches = []
+        for start in tqdm(range(0, features.shape[0], batch_size), desc="TSF reconstruct", leave=False):
+            chunk = features[start : start + batch_size].to(device)
+            if hasattr(sae, "decode") and hasattr(sae, "encode"):
+                recon = sae.decode(sae.encode(chunk)).float()
+            else:
+                out = sae(chunk)
+                recon = out[0] if isinstance(out, (tuple, list)) else out
+            recon_batches.append(recon.cpu())
+        return torch.cat(recon_batches, dim=0)
+
+    if token_mode == "cls":
+        tokens = features[:, 0, :].contiguous()
+        recon_batches = []
+        for start in tqdm(range(0, tokens.shape[0], batch_size), desc="TSF reconstruct", leave=False):
+            chunk = tokens[start : start + batch_size].to(device)
+            if hasattr(sae, "decode") and hasattr(sae, "encode"):
+                recon = sae.decode(sae.encode(chunk)).float()
+            else:
+                out = sae(chunk)
+                recon = out[0] if isinstance(out, (tuple, list)) else out
+            recon_batches.append(recon.cpu())
+        return torch.cat(recon_batches, dim=0)
+
+    if token_mode == "mean_patch":
+        token_tensor = features[:, 1:, :].contiguous()
+    elif token_mode == "mean_all":
+        token_tensor = features.contiguous()
+    else:
+        raise ValueError(f"Unknown token_mode={token_mode!r}; expected cls|mean_patch|mean_all")
+
+    n_images, tokens_per_image, d_model = token_tensor.shape
+    flat = token_tensor.view(n_images * tokens_per_image, d_model)
+    image_ids = torch.arange(n_images, device=device).repeat_interleave(tokens_per_image)
+    recon_sum = torch.zeros(n_images, d_model, dtype=torch.float32, device=device)
+
+    for start in tqdm(range(0, flat.shape[0], batch_size), desc="TSF reconstruct", leave=False):
+        end = min(start + batch_size, flat.shape[0])
+        chunk = flat[start:end].to(device)
+        if hasattr(sae, "decode") and hasattr(sae, "encode"):
+            recon = sae.decode(sae.encode(chunk)).float()
+        else:
+            out = sae(chunk)
+            recon = out[0] if isinstance(out, (tuple, list)) else out
+        recon_sum.index_add_(0, image_ids[start:end], recon)
+        del chunk, recon
+
+    return (recon_sum / float(tokens_per_image)).cpu()
+
+
+@torch.no_grad()
+def compute_task_subspace_fidelity(
+    sae,
+    features: torch.Tensor,
+    labels: List[int],
+    num_classes: int,
+    device: str = "cuda",
+    batch_size: int = 2048,
+    token_mode: str = "cls",
+    max_components: int = 0,
+    eig_eps: float = 1e-9,
+) -> Tuple[float, Dict[str, float]]:
+    """
+    Task Subspace Fidelity (TSF).
+
+    TSF is reconstruction R² restricted to the between-class discriminant
+    subspace of the *original adapted-model features*:
+
+        S_B = sum_c n_c (mu_c - mu_bar)(mu_c - mu_bar)^T
+        P   = top eigenvectors of S_B
+        TSF = 1 - ||(X - X_hat)P||_F² / ||(X - mu_bar)P||_F²
+
+    This focuses the reconstruction test on class-separating directions rather
+    than the full hidden space, so small SAE errors in task-relevant LoRA
+    directions are not washed out by generic high-variance directions.
+    """
+    x = _image_level_features_from_tokens(features, token_mode=token_mode).float()
+    x_hat = _reconstruct_image_level_features(
+        sae,
+        features,
+        device=device,
+        batch_size=batch_size,
+        token_mode=token_mode,
+    ).float()
+    labels_t = torch.tensor(labels, dtype=torch.long)
+    present = [int(c) for c in labels_t.unique(sorted=True).tolist() if (labels_t == int(c)).sum() >= 1]
+    n, d = x.shape
+    if len(present) <= 1 or n <= 1:
+        return 0.0, {
+            "tsf_token_mode": token_mode,
+            "tsf_rank": 0,
+            "tsf_error_energy": 0.0,
+            "tsf_total_energy": 0.0,
+        }
+
+    mu_bar = x.mean(dim=0)
+    sb = torch.zeros(d, d, dtype=torch.float64)
+    for c in present:
+        mask = labels_t == c
+        x_c = x[mask]
+        if x_c.numel() == 0:
+            continue
+        diff = (x_c.mean(dim=0) - mu_bar).double().unsqueeze(1)
+        sb += float(mask.sum().item()) * (diff @ diff.T)
+
+    evals, evecs = torch.linalg.eigh(sb)
+    order = evals.argsort(descending=True)
+    evals = evals[order]
+    evecs = evecs[:, order].float()
+    rank = int((evals > eig_eps * max(float(evals[0].item()), 1.0)).sum().item()) if evals.numel() else 0
+    rank = min(rank, len(present) - 1, d)
+    if max_components and max_components > 0:
+        rank = min(rank, int(max_components))
+    if rank <= 0:
+        return 0.0, {
+            "tsf_token_mode": token_mode,
+            "tsf_rank": 0,
+            "tsf_error_energy": 0.0,
+            "tsf_total_energy": 0.0,
+        }
+
+    p = evecs[:, :rank]
+    z = (x - mu_bar) @ p
+    z_hat = (x_hat - mu_bar) @ p
+    error_energy = float((z - z_hat).pow(2).sum().item())
+    total_energy = float(z.pow(2).sum().item())
+    tsf = 1.0 - error_energy / max(total_energy, 1e-12)
+    tsf = float(np.clip(tsf, 0.0, 1.0))
+    stats = {
+        "tsf_token_mode": token_mode,
+        "tsf_rank": int(rank),
+        "tsf_error_energy": error_energy,
+        "tsf_total_energy": total_energy,
+        "tsf_top_eigenvalue": float(evals[0].item()) if evals.numel() else 0.0,
+        "tsf_kept_eigen_energy": float(evals[:rank].sum().item()) if rank > 0 else 0.0,
+    }
+    print(
+        f"    [TSF] mode={token_mode}, rank={rank}, error/energy="
+        f"{error_energy / max(total_energy, 1e-12):.4f}, tsf={tsf:.4f}"
+    )
+    return tsf, stats
+
+
+def _prepare_dense_readout_features(
+    features: torch.Tensor,
+    train_idx: torch.Tensor,
+    test_idx: torch.Tensor,
+    top_features: int,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    X_train = features.float()[train_idx]
+    X_test = features.float()[test_idx]
+
+    if top_features > 0 and top_features < X_train.shape[1]:
+        var = X_train.var(dim=0)
+        keep = var.argsort(descending=True)[:top_features]
+        X_train = X_train[:, keep]
+        X_test = X_test[:, keep]
+
+    mu = X_train.mean(dim=0, keepdim=True)
+    sigma = X_train.std(dim=0, keepdim=True).clamp(min=1e-6)
+    return (X_train - mu) / sigma, (X_test - mu) / sigma
+
+
+@torch.no_grad()
+def compute_dense_readout_score(
+    features: torch.Tensor,
+    labels: List[int],
+    num_classes: int,
+    n_splits: int = 3,
+    ridge: float = 1.0,
+    top_features: int = 0,
+    min_class_count: int = 2,
+) -> Tuple[float, float, float]:
+    """Chance-normalised held-out ridge balanced accuracy for dense features."""
+    labels_t = torch.tensor(labels, dtype=torch.long)
+    split_pairs = _stratified_fold_indices(labels_t, n_splits=n_splits, min_class_count=min_class_count)
+    if not split_pairs:
+        return 0.0, 0.0, 0.0
+
+    fold_bacc = []
+    fold_chance = []
+    eye_cache: Dict[int, torch.Tensor] = {}
+    for train_idx, test_idx in split_pairs:
+        X_train, X_test = _prepare_dense_readout_features(features, train_idx, test_idx, top_features)
+        y_train = labels_t[train_idx]
+        y_test = labels_t[test_idx]
+
+        Y = F.one_hot(y_train, num_classes=num_classes).float()
+        K = X_train @ X_train.T
+        n_train = K.shape[0]
+        if n_train not in eye_cache:
+            eye_cache[n_train] = torch.eye(n_train, dtype=K.dtype)
+        dual = torch.linalg.solve(K + ridge * eye_cache[n_train], Y)
+        W = X_train.T @ dual
+        y_pred = (X_test @ W).argmax(dim=1)
+
+        bacc, n_eval_classes = _balanced_accuracy_score(y_test, y_pred, num_classes)
+        fold_bacc.append(bacc)
+        fold_chance.append(1.0 / max(n_eval_classes, 1))
+
+    balanced_acc = float(np.mean(fold_bacc))
+    chance = float(np.mean(fold_chance))
+    utility = (balanced_acc - chance) / max(1.0 - chance, 1e-12)
+    utility = float(max(0.0, min(1.0, utility)))
+    return utility, balanced_acc, chance
+
+
+@torch.no_grad()
+def compute_task_reconstruction_retention(
+    sae,
+    features: torch.Tensor,
+    labels: List[int],
+    num_classes: int,
+    device: str = "cuda",
+    batch_size: int = 2048,
+    n_splits: int = 3,
+    ridge: float = 1.0,
+    top_features: int = 0,
+) -> Tuple[float, float, float, float]:
+    """
+    Task Reconstruction Retention (TRR).
+
+    Instead of asking whether the SAE reconstructs variance, ask whether a
+    simple task readout still works after decode(encode(x)). We represent each
+    image by its mean patch hidden state before and after SAE reconstruction and
+    compute:
+
+        TRR = balanced_acc(reconstructed) / balanced_acc(original), clipped to [0, 1].
+
+    Returns (trr, recon_balanced_acc, original_balanced_acc, chance).
+    """
+    if features.ndim == 3:
+        patches = features[:, 1:, :].contiguous()
+        orig_image_features = patches.mean(dim=1).cpu()
+        n_images, patches_per_image, d_model = patches.shape
+        flat = patches.view(n_images * patches_per_image, d_model)
+        image_ids = torch.arange(n_images, device=device).repeat_interleave(patches_per_image)
+        recon_sum = torch.zeros(n_images, d_model, dtype=torch.float32, device=device)
+
+        for start in tqdm(range(0, flat.shape[0], batch_size), desc="TRR reconstruct", leave=False):
+            end = min(start + batch_size, flat.shape[0])
+            chunk = flat[start:end].to(device)
+            if hasattr(sae, "decode") and hasattr(sae, "encode"):
+                recon = sae.decode(sae.encode(chunk)).float()
+            else:
+                out = sae(chunk)
+                recon = out[0] if isinstance(out, (tuple, list)) else out
+            recon_sum.index_add_(0, image_ids[start:end], recon)
+            del chunk, recon
+
+        recon_image_features = (recon_sum / float(patches_per_image)).cpu()
+    else:
+        orig_image_features = features.float().cpu()
+        recon_batches = []
+        for start in tqdm(range(0, features.shape[0], batch_size), desc="TRR reconstruct", leave=False):
+            chunk = features[start : start + batch_size].to(device)
+            if hasattr(sae, "decode") and hasattr(sae, "encode"):
+                recon = sae.decode(sae.encode(chunk)).float()
+            else:
+                out = sae(chunk)
+                recon = out[0] if isinstance(out, (tuple, list)) else out
+            recon_batches.append(recon.cpu())
+        recon_image_features = torch.cat(recon_batches, dim=0)
+
+    _, orig_bacc, chance = compute_dense_readout_score(
+        orig_image_features,
+        labels,
+        num_classes,
+        n_splits=n_splits,
+        ridge=ridge,
+        top_features=top_features,
+    )
+    _, recon_bacc, _ = compute_dense_readout_score(
+        recon_image_features,
+        labels,
+        num_classes,
+        n_splits=n_splits,
+        ridge=ridge,
+        top_features=top_features,
+    )
+    trr = float(np.clip(recon_bacc / max(orig_bacc, 1e-12), 0.0, 1.0))
+    print(
+        f"    [TRR] recon_bacc={recon_bacc:.4f}, orig_bacc={orig_bacc:.4f}, "
+        f"chance={chance:.4f}, trr={trr:.4f}"
+    )
+    return trr, float(recon_bacc), float(orig_bacc), float(chance)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # 2. Concept Separability Score (CSS) — Fisher Discriminant Ratio
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -845,11 +1846,18 @@ def compute_dams(
     device: str = "cuda",
     alpha: float = 0.05,
     beta: float = 0.95,
+    gamma: float = 0.0,
+    coverage_power: float = 1.0,
     css_saturation: float = 0.4,
     # EC: 'cka' (default — kernel alignment concept space) | 'r2' (legacy)
     ec_metric: str = "cka",
     ec_batch_size: int = 512,
     ec_subsample: int = 2000,
+    das_subsample: int = 2000,
+    compute_utility_score: bool = True,
+    utility_top_features: int = 4096,
+    utility_splits: int = 3,
+    utility_ridge: float = 1.0,
     # CSS: 'mmd' (default — inter-class MMD in concept space) | 'fisher' (legacy)
     css_metric: str = "mmd",
     # FSS: 'entropy' (default — raw activation weights) | 'threshold' (legacy)
@@ -868,7 +1876,7 @@ def compute_dams(
     """
     Full DAMS computation.
 
-    DAMS = EC × (α × CSS_norm + β × FSS)
+    DAMS = EC^rho × (α × CSS_norm + β × FSS + γ × DAS)
 
     Default metric configuration (all three replace R²/hard-threshold approaches):
         EC  = CKA(X_cls, A_pool) with sigmoid kernel in SAE concept space  ∈ [0,1]
@@ -884,6 +1892,14 @@ def compute_dams(
               spec(f,c) = p(c|f) × (1 − H_norm(f))  ∈ [0,1]
               Measures whether individual SAE features are class-dedicated.
 
+        DAS = Class-balanced kernel target alignment CKA(A_pool, Y).
+              Measures statistical dependence between SAE concept geometry and
+              target-domain labels without rewarding generic CLIP geometry alone.
+
+        SUS = Chance-normalised balanced accuracy of a simple ridge readout on
+              frozen SAE activations. Measures whether the SAE is useful on the
+              dataset, independent of whether it is base or adapted.
+
     Args:
         ec_metric:  'cka' (default) | 'r2' (legacy R²)
         css_metric: 'mmd' (default) | 'fisher' (legacy Fisher discriminant)
@@ -892,7 +1908,9 @@ def compute_dams(
         precomputed_activations: (N, d_sae) — pass to avoid recomputing activations.
         sae_cfg, feature_layer: for layer-match diagnostics.
     """
-    assert abs(alpha + beta - 1.0) < 1e-6, f"α + β must equal 1, got {alpha + beta}"
+    weight_sum = alpha + beta + gamma
+    assert abs(weight_sum - 1.0) < 1e-6, f"alpha + beta + gamma must equal 1, got {weight_sum}"
+    assert coverage_power >= 0.0, f"coverage_power must be >= 0, got {coverage_power}"
     assert ec_metric in ("r2", "cka"), f"ec_metric must be 'r2' or 'cka'"
     assert css_metric in ("mmd", "fisher"), f"css_metric must be 'mmd' or 'fisher'"
     assert fss_method in ("entropy", "threshold"), f"fss_method must be 'entropy' or 'threshold'"
@@ -907,8 +1925,9 @@ def compute_dams(
         layer_match = (sae_layer == feature_layer)
 
     print(f"\n{'─' * 60}")
-    print(f"  DAMS = EC × (α·CSS + β·FSS)")
-    print(f"  EC={ec_metric}  CSS={css_metric}  FSS={fss_method}  α={alpha} β={beta} κ={css_saturation}")
+    print(f"  DAMS = EC^rho × (alpha·CSS + beta·FSS + gamma·DAS)")
+    print(f"  EC={ec_metric}  CSS={css_metric}  FSS={fss_method}  "
+          f"alpha={alpha} beta={beta} gamma={gamma} rho={coverage_power} kappa={css_saturation}")
     print(f"  N={N}, C={num_classes}, SAE layer={sae_layer}, feature layer={feature_layer}")
     print(f"  ||b_dec|| = {b_dec_norm:.4f}")
     if not layer_match:
@@ -965,7 +1984,7 @@ def compute_dams(
     print(f"  CSS [{css_metric}] raw={css_raw:.4f}  norm={css_norm:.4f}")
 
     # ── 4. Feature Specificity Score ─────────────────────────────────────
-    print("\n[3/3] Computing Feature Specificity (FSS)...")
+    print("\n[3/4] Computing Feature Specificity (FSS)...")
     if fss_method == "entropy":
         fss, fss_per_class = compute_feature_specificity_entropy(
             acts, labels, num_classes,
@@ -993,10 +2012,40 @@ def compute_dams(
         )
     print(f"  FSS = {fss:.4f}")
 
-    # ── DAMS = EC × (α·CSS_norm + β·FSS) ────────────────────────────────
-    dams = ec * (alpha * css_norm + beta * fss)
-    print(f"\n  DAMS = {ec:.4f} × ({alpha}×{css_norm:.4f} + {beta}×{fss:.4f}) = {dams:.4f}")
-    print(f"  EC[{ec_metric}]={ec:.4f}  CSS[{css_metric}]_norm={css_norm:.4f}  FSS[{fss_method}]={fss:.4f}")
+    # ── DAS: label dependence in concept space ───────────────────────────
+    print("\n[4/4] Computing Domain Alignment Score (DAS)...")
+    das = compute_domain_alignment_score(
+        acts, labels, num_classes,
+        subsample=das_subsample,
+    )
+    print(f"  DAS = {das:.4f}")
+
+    # ── SUS: frozen representation utility ───────────────────────────────
+    if compute_utility_score:
+        print("\n[utility] Computing SAE Utility Score (SUS)...")
+        utility, utility_balanced_acc, utility_chance = compute_sae_utility_score(
+            acts,
+            labels,
+            num_classes,
+            n_splits=utility_splits,
+            ridge=utility_ridge,
+            top_features=utility_top_features,
+        )
+    else:
+        utility, utility_balanced_acc, utility_chance = 0.0, 0.0, 0.0
+    print(f"  SUS = {utility:.4f}")
+
+    # ── DAMS = EC^rho × (α·CSS_norm + β·FSS + γ·DAS) ────────────────────
+    coverage_gate = float(ec ** coverage_power) if coverage_power > 0 else 1.0
+    dams = coverage_gate * (alpha * css_norm + beta * fss + gamma * das)
+    print(
+        f"\n  DAMS = {coverage_gate:.4f} × "
+        f"({alpha}×{css_norm:.4f} + {beta}×{fss:.4f} + {gamma}×{das:.4f}) = {dams:.4f}"
+    )
+    print(
+        f"  EC[{ec_metric}]={ec:.4f}  gate={coverage_gate:.4f}  "
+        f"CSS[{css_metric}]_norm={css_norm:.4f}  FSS[{fss_method}]={fss:.4f}  DAS={das:.4f}"
+    )
 
     return DAMSResult(
         ec=ec,
@@ -1006,8 +2055,17 @@ def compute_dams(
         css_metric=css_metric,
         fss=fss,
         fss_method=fss_method,
+        das=das,
+        das_metric="label_cka",
+        utility=utility,
+        utility_balanced_acc=utility_balanced_acc,
+        utility_chance=utility_chance,
+        utility_metric="ridge_readout",
         alpha=alpha,
         beta=beta,
+        gamma=gamma,
+        coverage_power=coverage_power,
+        coverage_gate=coverage_gate,
         dams=dams,
         recon_mse_per_dim=mse_per_dim,
         baseline_var_per_dim=var_per_dim,
@@ -1163,6 +2221,8 @@ def compare_dams(
         (f"CSS raw",       result_a.css_raw,  result_b.css_raw),
         (css_label,        result_a.css_norm, result_b.css_norm),
         (fss_label,        result_a.fss,      result_b.fss),
+        ("DAS [label_cka]", result_a.das,      result_b.das),
+        ("SUS [readout]",  result_a.utility,   result_b.utility),
         ("DAMS",           result_a.dams,     result_b.dams),
     ]:
         print(f"{name:<22s} {va:>16.4f} {vb:>16.4f} {va - vb:>+8.4f}")
@@ -1202,12 +2262,19 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument("--alpha", type=float, default=0.5)
     parser.add_argument("--beta", type=float, default=0.5)
+    parser.add_argument("--gamma", type=float, default=0.0)
+    parser.add_argument("--coverage_power", type=float, default=1.0)
     parser.add_argument("--css_saturation", type=float, default=0.5)
     parser.add_argument(
         "--ec_metric", type=str, default="cka", choices=["r2", "cka"],
         help="EC metric: 'cka' (kernel alignment, default) or 'r2' (legacy).",
     )
     parser.add_argument("--ec_subsample", type=int, default=2000)
+    parser.add_argument("--das_subsample", type=int, default=2000)
+    parser.add_argument("--no_utility_score", action="store_true")
+    parser.add_argument("--utility_top_features", type=int, default=4096)
+    parser.add_argument("--utility_splits", type=int, default=3)
+    parser.add_argument("--utility_ridge", type=float, default=1.0)
     parser.add_argument(
         "--css_metric", type=str, default="mmd", choices=["mmd", "fisher"],
         help="CSS metric: 'mmd' (inter-class MMD, default) or 'fisher' (legacy).",
@@ -1286,9 +2353,16 @@ def main():
         sae=sae, features=features, labels=labels,
         num_classes=num_classes, device=device,
         alpha=args.alpha, beta=args.beta,
+        gamma=args.gamma,
+        coverage_power=args.coverage_power,
         css_saturation=args.css_saturation,
         ec_metric=args.ec_metric,
         ec_subsample=args.ec_subsample,
+        das_subsample=args.das_subsample,
+        compute_utility_score=not args.no_utility_score,
+        utility_top_features=args.utility_top_features,
+        utility_splits=args.utility_splits,
+        utility_ridge=args.utility_ridge,
         css_metric=args.css_metric,
         fss_method=args.fss_method,
         fss_min_support_weight=args.fss_min_support_weight,

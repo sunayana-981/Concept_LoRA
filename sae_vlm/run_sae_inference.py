@@ -1382,6 +1382,13 @@ def run_inference_for_dataset(
     compute_dams_score: bool = True,
     dams_alpha: float = 0.5,
     dams_beta: float = 0.5,
+    dams_gamma: float = 0.0,
+    dams_coverage_power: float = 1.0,
+    dams_das_subsample: int = 2000,
+    dams_no_utility_score: bool = False,
+    dams_utility_top_features: int = 4096,
+    dams_utility_splits: int = 3,
+    dams_utility_ridge: float = 1.0,
     dams_css_saturation: float = 0.5,
     dams_top_features_fss: int = 0,
     dams_fss_min_support: Optional[int] = None,
@@ -1636,6 +1643,13 @@ def run_inference_for_dataset(
             device=device,
             alpha=dams_alpha,
             beta=dams_beta,
+            gamma=dams_gamma,
+            coverage_power=dams_coverage_power,
+            das_subsample=dams_das_subsample,
+            compute_utility_score=not dams_no_utility_score,
+            utility_top_features=dams_utility_top_features,
+            utility_splits=dams_utility_splits,
+            utility_ridge=dams_utility_ridge,
             css_saturation=dams_css_saturation,
             top_features_fss=dams_top_features_fss,
             fss_min_support=dams_fss_min_support,
@@ -1808,6 +1822,20 @@ def main():
                         help="DAMS weight for CSS component (α, default 0.5)")
     parser.add_argument("--dams_beta", type=float, default=0.5,
                         help="DAMS weight for FSS component (β, default 0.5)")
+    parser.add_argument("--dams_gamma", type=float, default=0.0,
+                        help="DAMS weight for DAS label-alignment component (γ, default 0.0)")
+    parser.add_argument("--dams_coverage_power", type=float, default=1.0,
+                        help="Exponent ρ for EC reliability gate EC^ρ (0 disables gate)")
+    parser.add_argument("--dams_das_subsample", type=int, default=2000,
+                        help="Max samples for DAS label-kernel alignment")
+    parser.add_argument("--dams_no_utility_score", action="store_true",
+                        help="Skip SUS readout-utility computation")
+    parser.add_argument("--dams_utility_top_features", type=int, default=4096,
+                        help="Top high-variance SAE features used by SUS ridge readout")
+    parser.add_argument("--dams_utility_splits", type=int, default=3,
+                        help="Number of deterministic stratified folds for SUS")
+    parser.add_argument("--dams_utility_ridge", type=float, default=1.0,
+                        help="Ridge regularization for SUS readout")
     parser.add_argument("--dams_css_saturation", type=float, default=0.5,
                         help="CSS half-saturation constant κ (default 0.5)")
     parser.add_argument("--dams_top_features_fss", type=int, default=0,
@@ -1871,6 +1899,13 @@ def main():
                 compute_dams_score=not args.no_dams,
                 dams_alpha=args.dams_alpha,
                 dams_beta=args.dams_beta,
+                dams_gamma=args.dams_gamma,
+                dams_coverage_power=args.dams_coverage_power,
+                dams_das_subsample=args.dams_das_subsample,
+                dams_no_utility_score=args.dams_no_utility_score,
+                dams_utility_top_features=args.dams_utility_top_features,
+                dams_utility_splits=args.dams_utility_splits,
+                dams_utility_ridge=args.dams_utility_ridge,
                 dams_css_saturation=args.dams_css_saturation,
                 dams_top_features_fss=args.dams_top_features_fss,
                 dams_fss_min_support=args.dams_fss_min_support,

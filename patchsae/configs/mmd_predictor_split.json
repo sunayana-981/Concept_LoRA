@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "endpoint_id": "lora_no_sae_minus_lora_gsae_accuracy_pp",
+  "endpoint_definition": "LoRA no-SAE accuracy minus LoRA plus generic ImageNet SAE accuracy, in percentage points; positive means generic-SAE intervention degradation.",
+  "predictor": "MMD2_clip",
+  "model": "Ordinary least squares with intercept, one untransformed predictor, and no holdout tuning.",
+  "planned_training_n": 15,
+  "planned_development_datasets": [
+    "eurosat",
+    "dtd",
+    "imagenet-r",
+    "imagenetv2",
+    "caltech101",
+    "flowers102",
+    "imagenet-a",
+    "imagenet-o",
+    "sketch",
+    "pathmnist",
+    "cub2002011",
+    "ucf101",
+    "oxford_pets",
+    "stanford_cars",
+    "food101"
+  ],
+  "current_training_datasets": [
+    "caltech101",
+    "cub2002011",
+    "dtd",
+    "eurosat",
+    "fgvc",
+    "ucf101",
+    "oxford_pets",
+    "pathmnist"
+  ],
+  "current_training_note": "Seven of fifteen planned development domains currently have paired outcomes (oxford_pets and pathmnist added 2026-07-24 via the ready-now eval_matrix run); FGVC is an auxiliary eighth domain not in the planned 15. Any fit to these eight is exploratory and is not the planned 15-domain confirmatory fit. pathmnist's eval split (7180 images, the medmnist_npz path's fixed official test split) is larger than the 225-image cap used for the imagefolder-type domains -- this makes its point estimate more precise, not biased, but technically departs from the fit's stated homoscedastic-residual assumption.",
+  "heldout_datasets": [
+    "officehome",
+    "kitti",
+    "cityscapes"
+  ],
+  "holdout_policy": "Held-out outcomes must not occur in the fit input. Fit and freeze predictions before creating the holdout outcome CSV. Never choose the endpoint, transformation, or model family using these domains.",
+  "distance_reference": "ImageNet-1k validation",
+  "distance_feature_space": "OpenAI CLIP ViT-L/14 normalized image embeddings",
+  "distance_estimator": "Unbiased RBF MMD squared with cross-distance median bandwidth, deterministic n=2000 subsamples and seed 42."
+}

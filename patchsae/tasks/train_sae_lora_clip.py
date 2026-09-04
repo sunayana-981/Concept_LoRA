@@ -38,11 +38,16 @@ from datasets import load_dataset
 print("[DEBUG] Importing project modules...")
 try:
     from src.sae_training.config import ViTSAERunnerConfig
+    from src.sae_training.provenance import (
+        build_experiment_metadata,
+        infer_activation_vectors_per_example,
+        sha256_file,
+    )
     from src.sae_training.sae_trainer import SAETrainer
     from src.sae_training.sparse_autoencoder import SparseAutoencoder
     from src.sae_training.utils import get_scheduler
     from src.sae_training.vit_activations_store import ViTActivationsStore
-    from tasks.utils import DATASET_INFO, get_classnames, load_hooked_vit
+    from tasks.utils import DATASET_INFO, get_classnames, load_hooked_vit, load_sae
     print("[DEBUG] All project imports successful.")
 except ImportError as e:
     print(f"[FATAL] Import failed: {e}")
@@ -461,6 +466,34 @@ def verify_model_loaded(model, lora_checkpoint_path, device):
     print("[DEBUG] Model verification complete.\n")
 
 
+def validate_initialization_checkpoint(sae, source_cfg, cfg, checkpoint_path):
+    """Fail early if a warm-start SAE would change a controlled factor."""
+    expected = {
+        "d_in": cfg.d_in,
+        "d_sae": cfg.d_sae,
+        "block_layer": cfg.block_layer,
+        "module_name": cfg.module_name,
+        "gated_sae": bool(cfg.gated_sae),
+    }
+    observed = {
+        "d_in": sae.d_in,
+        "d_sae": sae.d_sae,
+        "block_layer": getattr(source_cfg, "block_layer", None),
+        "module_name": getattr(source_cfg, "module_name", None),
+        "gated_sae": bool(getattr(source_cfg, "gated_sae", False)),
+    }
+    mismatches = [
+        f"{key}: checkpoint={observed[key]!r}, requested={value!r}"
+        for key, value in expected.items()
+        if observed[key] != value
+    ]
+    if mismatches:
+        raise ValueError(
+            f"SAE initialization checkpoint is not factor-matched: {checkpoint_path}\n  "
+            + "\n  ".join(mismatches)
+        )
+
+
 # =========================================================================
 # Main Training Script
 # =========================================================================
@@ -474,6 +507,10 @@ def main():
     parser.add_argument("--class_token", action="store_true", default=None)
     parser.add_argument("--image_width", type=int, default=224)
     parser.add_argument("--image_height", type=int, default=224)
+    parser.add_argument(
+        "--patch_size", type=int, default=16,
+        help="Patch size used only to derive activation-vector exposure metadata."
+    )
     parser.add_argument("--model_name", type=str, default="openai/clip-vit-base-patch16")
     parser.add_argument("--module_name", type=str, default="resid")
     parser.add_argument(
@@ -495,8 +532,58 @@ def main():
         help="Format of LoRA checkpoint. 'auto' tries to detect automatically."
     )
 
+    # --- Controlled SAE initialization arm ---
+    parser.add_argument(
+        "--sae_initialization",
+        choices=["scratch", "checkpoint"],
+        default="scratch",
+        help="Random SAE initialization or warm-start from --sae_checkpoint_path.",
+    )
+    parser.add_argument(
+        "--sae_checkpoint_path",
+        type=str,
+        default=None,
+        help="G-SAE checkpoint used only when --sae_initialization checkpoint.",
+    )
+    parser.add_argument(
+        "--protect_frac",
+        type=float,
+        default=0.0,
+        help="Controlled-arm metadata. This full-dictionary trainer requires 0.0.",
+    )
+    parser.add_argument(
+        "--sae_condition",
+        type=str,
+        default="scratchsae",
+        help="Condition label stored in checkpoint provenance.",
+    )
+
     # --- Dataset ---
     parser.add_argument("--dataset", type=str, default="imagenet")
+    parser.add_argument(
+        "--target_dataset",
+        type=str,
+        default=None,
+        help="Rebuttal-facing target name when --dataset uses an internal alias.",
+    )
+    parser.add_argument(
+        "--activation_data_role",
+        choices=["target", "generic", "source", "other"],
+        default="target",
+        help="Role of --dataset in the controlled comparison.",
+    )
+    parser.add_argument(
+        "--target_data_recipe",
+        type=str,
+        default=None,
+        help="Stable dataset/split recipe identifier stored in provenance.",
+    )
+    parser.add_argument(
+        "--target_data_inventory_sha256",
+        type=str,
+        default=None,
+        help="Path/size inventory hash for the exact target split, when available.",
+    )
     parser.add_argument("--use_cached_activations", action="store_true", default=None)
     parser.add_argument("--cached_activations_path", type=str)
     parser.add_argument("--expansion_factor", type=int, default=64)
@@ -509,7 +596,26 @@ def main():
     parser.add_argument("--lr_scheduler_name", type=str, default="constantwithwarmup")
     parser.add_argument("--batch_size", type=int, default=16)
     parser.add_argument("--lr_warm_up_steps", type=int, default=500)
-    parser.add_argument("--total_training_tokens", type=int, default=2_621_440)
+    budget = parser.add_mutually_exclusive_group()
+    budget.add_argument(
+        "--training_examples",
+        type=int,
+        default=None,
+        help="Number of images/examples consumed by the trainer counter.",
+    )
+    budget.add_argument(
+        "--total_training_tokens",
+        type=int,
+        default=None,
+        help="Deprecated alias for --training_examples; this counter is not "
+             "the number of patch activation tokens.",
+    )
+    parser.add_argument(
+        "--activation_vectors_per_example",
+        type=int,
+        default=None,
+        help="Override derived ViT activation vectors per image (default: auto).",
+    )
     parser.add_argument("--n_batches_in_store", type=int, default=15)
     parser.add_argument("--mse_cls_coefficient", type=float, default=1.0)
 
@@ -556,6 +662,51 @@ def main():
     )
 
     args = parser.parse_args()
+    requested_examples = (
+        args.training_examples
+        if args.training_examples is not None
+        else args.total_training_tokens
+    )
+    if requested_examples is None:
+        requested_examples = 2_621_440
+    if requested_examples <= 0:
+        parser.error("--training_examples must be positive")
+    # Preserve the historical attribute used by the trainers/config while
+    # making its true unit explicit everywhere new.
+    args.training_examples = requested_examples
+    args.total_training_tokens = requested_examples
+    args.target_dataset = args.target_dataset or args.dataset
+    if args.activation_vectors_per_example is None:
+        args.activation_vectors_per_example = infer_activation_vectors_per_example(
+            image_width=args.image_width,
+            image_height=args.image_height,
+            patch_size=args.patch_size,
+            class_token_only=bool(args.class_token),
+        )
+
+    if args.protect_frac != 0.0:
+        parser.error(
+            "train_sae_lora_clip.py is the full-dictionary (protect_frac=0) "
+            "trainer; use train_sae_masked_finetune.py for protected units"
+        )
+    if args.sae_initialization == "scratch" and args.sae_checkpoint_path:
+        parser.error(
+            "--sae_checkpoint_path is only valid with "
+            "--sae_initialization checkpoint"
+        )
+    if args.sae_initialization == "checkpoint" and not args.sae_checkpoint_path:
+        parser.error(
+            "--sae_initialization checkpoint requires --sae_checkpoint_path"
+        )
+    if args.sae_condition == "ftsae" and args.sae_initialization != "checkpoint":
+        parser.error(
+            "the controlled `ftsae` condition must warm-start from the G-SAE; "
+            "label random initialization as `scratchsae`"
+        )
+    if args.sae_condition == "scratchsae" and args.sae_initialization != "scratch":
+        parser.error(
+            "the controlled `scratchsae` condition must use random initialization"
+        )
 
     # =====================================================================
     # Environment Checks
@@ -594,6 +745,18 @@ def main():
             print(f"[FATAL] LoRA checkpoint not found: {lora_path}")
             sys.exit(1)
     print(f"[DEBUG] LoRA checkpoint path validated: {lora_path}")
+    lora_sha256 = sha256_file(lora_path) if lora_path.is_file() else None
+
+    init_path = None
+    init_sha256 = None
+    if args.sae_initialization == "checkpoint":
+        init_path = Path(args.sae_checkpoint_path)
+        if not init_path.is_file():
+            print(f"[FATAL] SAE initialization checkpoint not found: {init_path}")
+            sys.exit(1)
+        init_path = init_path.resolve()
+        print(f"[INFO] Hashing SAE initialization checkpoint: {init_path}")
+        init_sha256 = sha256_file(init_path)
 
     # =====================================================================
     # Training Loop (per block layer)
@@ -601,6 +764,14 @@ def main():
     saes = {}
     print(f"\n[INFO] Training SAEs for block layers: {args.block_layers}")
     print(f"[INFO] Using LoRA checkpoint: {args.lora_checkpoint_path}")
+    print(f"[INFO] Condition: {args.sae_condition}")
+    print(f"[INFO] SAE initialization: {args.sae_initialization}")
+    print(f"[INFO] Training examples: {args.training_examples:,}")
+    print(
+        "[INFO] Derived activation-vector exposure: "
+        f"{args.training_examples * args.activation_vectors_per_example:,} "
+        f"({args.activation_vectors_per_example} vectors/image)"
+    )
     print()
 
     for layer_idx, block_layer in enumerate(args.block_layers):
@@ -610,6 +781,15 @@ def main():
         print("=" * 60)
 
         t_start = time.time()
+
+        source_sae = None
+        source_cfg = None
+        gated_sae = bool(args.gated_sae)
+        if init_path is not None:
+            print(f"[DEBUG] Loading SAE initialization checkpoint: {init_path}")
+            source_sae, source_cfg = load_sae(str(init_path), args.device)
+            if args.gated_sae is None:
+                gated_sae = bool(getattr(source_cfg, "gated_sae", False))
 
         # --- Config ---
         cfg = ViTSAERunnerConfig(
@@ -627,13 +807,15 @@ def main():
             d_in=args.clip_dim,
             expansion_factor=args.expansion_factor,
             b_dec_init_method=args.b_dec_init_method,
-            gated_sae=args.gated_sae,
+            gated_sae=gated_sae,
             lr=args.lr,
             l1_coefficient=args.l1_coefficient,
             lr_scheduler_name=args.lr_scheduler_name,
             batch_size=args.batch_size,
             lr_warm_up_steps=args.lr_warm_up_steps,
             total_training_tokens=args.total_training_tokens,
+            training_examples=args.training_examples,
+            activation_vectors_per_example=args.activation_vectors_per_example,
             n_batches_in_store=args.n_batches_in_store,
             mse_cls_coefficient=args.mse_cls_coefficient,
             use_ghost_grads=args.use_ghost_grads,
@@ -651,6 +833,32 @@ def main():
             checkpoint_path=args.checkpoint_path,
             dtype=torch.float32,
         )
+        cfg.experiment_metadata = build_experiment_metadata(
+            condition=args.sae_condition,
+            initialization=(
+                "checkpoint" if init_path is not None else "scratch_random"
+            ),
+            initialization_checkpoint=(
+                str(init_path) if init_path is not None else None
+            ),
+            initialization_checkpoint_sha256=init_sha256,
+            activation_dataset=args.dataset,
+            target_dataset=args.target_dataset,
+            activation_data_role=args.activation_data_role,
+            adapted_model_checkpoint=str(lora_path.resolve()),
+            adapted_model_checkpoint_sha256=lora_sha256,
+            target_data_recipe=args.target_data_recipe,
+            target_data_inventory_sha256=args.target_data_inventory_sha256,
+            seed=args.seed,
+            block_layer=block_layer,
+            module_name=args.module_name,
+            d_in=args.clip_dim,
+            expansion_factor=args.expansion_factor,
+            gated_sae=gated_sae,
+            training_examples_requested=args.training_examples,
+            activation_vectors_per_example=args.activation_vectors_per_example,
+            protect_frac=args.protect_frac,
+        )
         print(f"[DEBUG] Config created: d_in={cfg.d_in}, "
               f"expansion={cfg.expansion_factor}, "
               f"d_sae={cfg.d_in * cfg.expansion_factor}")
@@ -662,8 +870,17 @@ def main():
         print(f"[DEBUG] Dataset loaded: {args.dataset}")
 
         # --- SAE ---
-        print("[DEBUG] Initializing SparseAutoencoder...")
-        sae = SparseAutoencoder(cfg, args.device)
+        if source_sae is None:
+            print("[DEBUG] Randomly initializing SparseAutoencoder...")
+            sae = SparseAutoencoder(cfg, args.device)
+        else:
+            print("[DEBUG] Initializing SparseAutoencoder from G-SAE checkpoint...")
+            validate_initialization_checkpoint(
+                source_sae, source_cfg, cfg, init_path
+            )
+            sae = source_sae
+            sae.cfg = cfg
+            sae.l1_coefficient = cfg.l1_coefficient
         print(f"[DEBUG] SAE initialized: "
               f"{sum(p.numel() for p in sae.parameters()):,} parameters")
 
@@ -703,9 +920,21 @@ def main():
         )
         print("[DEBUG] ActivationsStore initialized.")
 
-        # Verify activations
+        # Verification uses an independent store so toggling this diagnostic
+        # cannot change the training data order.
         if not args.skip_activation_verify:
-            verify_activations(activation_store, block_layer, args.device)
+            verification_store = ViTActivationsStore(
+                dataset,
+                args.batch_size,
+                args.device,
+                args.seed,
+                vit,
+                block_layer,
+                cfg.module_name,
+                args.class_token,
+            )
+            verify_activations(verification_store, block_layer, args.device)
+            del verification_store
 
         # --- Optimizer & Scheduler ---
         optimizer = torch.optim.Adam(sae.parameters(), lr=sae.cfg.lr)
@@ -713,11 +942,31 @@ def main():
         print(f"[DEBUG] Optimizer: Adam (lr={sae.cfg.lr}), "
               f"Scheduler: {args.lr_scheduler_name}")
 
-        # --- Initialize decoder bias ---
-        print("[DEBUG] Initializing SAE b_dec with geometric median...")
-        sae.initialize_b_dec(activation_store)
-        print(f"[DEBUG] b_dec initialized: mean={sae.b_dec.data.float().mean():.4f}, "
-              f"std={sae.b_dec.data.float().std():.4f}")
+        # Random initialization needs a target-domain decoder bias. Use an
+        # independent store so both controlled arms start training at the same
+        # shuffled example. A checkpoint-initialized FT-SAE deliberately keeps
+        # the G-SAE decoder bias as part of its initialization factor.
+        if source_sae is None:
+            print("[DEBUG] Initializing scratch SAE b_dec with geometric median...")
+            bias_init_store = ViTActivationsStore(
+                dataset,
+                args.batch_size,
+                args.device,
+                args.seed,
+                vit,
+                block_layer,
+                cfg.module_name,
+                args.class_token,
+            )
+            sae.initialize_b_dec(bias_init_store)
+            del bias_init_store
+            print(
+                f"[DEBUG] b_dec initialized: "
+                f"mean={sae.b_dec.data.float().mean():.4f}, "
+                f"std={sae.b_dec.data.float().std():.4f}"
+            )
+        else:
+            print("[DEBUG] Preserving G-SAE b_dec from initialization checkpoint.")
 
         sae.train()
 

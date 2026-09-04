@@ -1,0 +1,26 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{Model selection for the retrain/reuse rule, by leave-one-domain-out
+(LODO) cross-validation.} Every subset of $\{\mathrm{MMD}^2, \texttt{concept\_gap},
+n_{\mathrm{classes}}\}$ is fit as an OLS predictor of degradation and scored
+out-of-sample. The final model is chosen by LODO $R^2$, not in-sample fit: adding
+class cardinality on top of the selected pair is indistinguishable in-sample
+($R^2=0.857$ either way) but collapses out-of-sample ($0.621 \rightarrow 0.003$),
+a textbook overfit at $n=8$ that a full-sample comparison would not have caught.}
+\label{tab:degradation_regressor}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Predictor set} & \textbf{Full $R^2$} & \textbf{LODO $R^2$} & \textbf{LODO MAE (pp)} & \textbf{LODO $\rho$ ($p$)} \\
+\midrule
+$\mathrm{MMD}^2$ alone                                   & 0.004 & $-1.211$ & 6.27 & $-0.95$ (0.000) \\
+\texttt{concept\_gap} alone                              & 0.753 & 0.506 & 3.10 & 0.95 (0.000) \\
+\rowcolor{gray!12}
+$\mathrm{MMD}^2 + $ \texttt{concept\_gap}                & \bf 0.857 & \bf 0.621 & \bf 2.43 & 0.81 (0.015) \\
+\texttt{concept\_gap} $+\, n_{\mathrm{classes}}$         & 0.781 & 0.495 & 3.10 & 0.93 (0.001) \\
+$\mathrm{MMD}^2 + $ \texttt{concept\_gap} $+\, n_{\mathrm{classes}}$ & 0.857 & 0.003 & 3.68 & 0.71 (0.047) \\
+$n_{\mathrm{classes}}$ alone                             & 0.156 & $-0.577$ & 5.20 & $-0.36$ (0.385) \\
+\bottomrule
+\end{tabular}
+\end{table}

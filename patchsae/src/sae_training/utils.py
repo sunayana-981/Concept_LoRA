@@ -5,6 +5,7 @@ import torch
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 
+from src.sae_training.backbone_registry import get_backbone_spec
 from src.sae_training.hooked_vit import HookedVisionTransformer
 
 SAE_DIM = 49152
@@ -13,15 +14,38 @@ SAE_DIM = 49152
 def process_model_inputs(
     batch: Dict, vit: HookedVisionTransformer, device: str, process_labels: bool = False
 ) -> torch.Tensor:
-    """Process input images through the ViT processor."""
+    """Process input images through the ViT processor.
+
+    Backbones without a paired text tower (DINOv2) use an image-only
+    processor (e.g. AutoImageProcessor) that doesn't accept a `text=` kwarg
+    at all, and their model's forward() doesn't accept `input_ids`, so the
+    combined image+text processor call used for CLIP/SigLIP2/MaPLe must be
+    skipped entirely rather than just passed an empty string.
+    """
+    backbone = getattr(vit, "backbone", None)
+    has_text_tower = backbone is None or get_backbone_spec(backbone).has_text_tower
+
+    # Some datasets (e.g. caltech101) mix grayscale ("L") and RGB images.
+    # CLIPImageProcessor happens to convert to RGB internally, but not every
+    # HF image processor does (confirmed: AlignProcessor doesn't), so a
+    # batch straddling both modes fails to stack into one tensor ("Unable to
+    # create tensor, you should probably activate padding..." -- a confusing
+    # error for what's actually a channel-count mismatch, not a length one).
+    # Converting explicitly here is a no-op for already-RGB images and fixes
+    # it regardless of which backbone's processor is used.
+    images = [img.convert("RGB") for img in batch["image"]]
+
+    if not has_text_tower:
+        return vit.processor(images=images, return_tensors="pt").to(device)
+
     if process_labels:
         labels = [f"A photo of a {label}" for label in batch["label"]]
         return vit.processor(
-            images=batch["image"], text=labels, return_tensors="pt", padding=True
+            images=images, text=labels, return_tensors="pt", padding=True
         ).to(device)
 
     return vit.processor(
-        images=batch["image"], text="", return_tensors="pt", padding=True
+        images=images, text="", return_tensors="pt", padding=True
     ).to(device)
 
 

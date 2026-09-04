@@ -1,0 +1,29 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{Causal interventions on SAE latents: generic vs.\ finetuned.}
+For each class we take its top-activating latent and edit it in place using the
+error-preserving rule $x' = x + W_D^{\top}(z' - z)$, so an unmodified latent is an
+exact no-op and any measured effect is attributable to the edited coordinate rather
+than to reconstruction noise. Effects are reported relative to a matched random
+control latent drawn from the same activity-frequency bin; brackets give bootstrap
+$95\%$ CIs over evaluation examples. In all four cells $\bar{S}$'s own interval
+covers zero: editing a generic-SAE latent on the adapted model does nothing a random
+latent would not do. $\hat{S}$'s effects are larger in all four cells and
+significantly larger than $\bar{S}$'s in three. The generic dictionary is not merely
+a worse description of the adapted model --- it does not correspond to steerable
+structure in it at all.}
+\label{tab:causal_steering}
+\setlength{\tabcolsep}{4pt}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{llccc}
+\toprule
+\textbf{Dataset} & \textbf{Intervention} & \textbf{Generic $\bar{S}$} & \textbf{Finetuned $\hat{S}$} & $\hat{S}-\bar{S}$ \\
+\midrule
+eurosat   & ablate (target class)   & $-0.015$ [$-0.037$, 0.004] & 0.091 [$-0.026$, 0.211] & $+0.106$ [$-0.012$, 0.228] \\
+eurosat   & amplify (non-target)    & 0.020 [$-0.001$, 0.047] & 1.263 [0.931, 1.600] & $\bf +1.243$ [0.910, 1.585] \\
+pathmnist & ablate (target class)   & $-0.008$ [$-0.034$, 0.014] & 0.222 [0.060, 0.378] & $\bf +0.230$ [0.072, 0.387] \\
+pathmnist & amplify (non-target)    & 0.034 [$-0.022$, 0.116] & 2.369 [1.379, 3.551] & $\bf +2.335$ [1.340, 3.481] \\
+\bottomrule
+\end{tabular}}
+\end{table}

@@ -1,0 +1,510 @@
+\newcommand{\maketitlesupplementary}{}
+\setcounter{page}{1}
+\maketitlesupplementary
+\subsection{SAE Variant Formulations}
+\label{app:sae-variants}
+ 
+All SAE variants share a linear encoder, a nonlinearity $\sigma(\cdot)$, and a linear decoder trained to reconstruct hooked ViT token activations. Let $z \in \mathbb{R}^d$ be a hooked token vector (CLS or patch) at layer $\ell$, and let $d_{\mathrm{SAE}} \gg d$ be the overcomplete latent dimension. The general form is
+\begin{equation}
+\mathrm{SAE}(z) \;=\; W_D^{\top}\,h(z) + b_D,
+\qquad
+h(z) \;=\; \sigma\!\left(W_E^{\top}(z - b_D) + b_E\right)
+\in \mathbb{R}^{d_{\mathrm{SAE}}}_{\geq 0},
+\label{eq:sae-general}
+\end{equation}
+where $W_E \in \mathbb{R}^{d \times d_{\mathrm{SAE}}}$, $W_D \in \mathbb{R}^{d_{\mathrm{SAE}} \times d}$, and $b_E, b_D$ are bias terms.
+ 
+\paragraph{ReLU SAE~\citep{cunningham2024sparse}.}
+Uses $\sigma = \mathrm{ReLU}$ with an $\ell_1$ penalty:
+\begin{equation}
+\mathcal{L}_{\mathrm{ReLU}}
+\;=\;
+\|\mathrm{SAE}(z) - z\|_2^2
+\;+\;
+\lambda_{\ell_1}\,\|h(z)\|_1.
+\label{eq:relu-sae}
+\end{equation}
+ 
+\paragraph{Top-$k$ SAE~\citep{gao2025scaling}.}
+Retains only the $k$ largest pre-activations:
+\begin{equation}
+h(z) \;=\; \mathrm{TopK}_{k}\!\left(W_E^{\top}(z - b_D) + b_E\right),
+\qquad
+\mathcal{L}_{\mathrm{TopK}} \;=\; \|\mathrm{SAE}(z) - z\|_2^2.
+\label{eq:topk-sae}
+\end{equation}
+Because Top-$k$ carries no $\ell_1$ term to bound latent magnitudes, we revive dead
+latents with the auxiliary reconstruction loss of \citet{gao2025scaling} rather than
+the ghost-gradient scheme used for the ReLU variants: the $k_{\mathrm{aux}}$ most-active
+dead latents are asked to reconstruct the detached residual, weighted by
+$\tfrac{1}{32}$. The exponential ghost-gradient term is unbounded without an $\ell_1$
+penalty holding pre-activations down, and diverged in practice.
+
+ 
+\paragraph{Gated SAE~\citep{rajamanoharan2024improving}.}
+Decouples gating from magnitude using $\pi(z) = W_E^{\top}(z - b_D)$:
+\begin{equation}
+h_{\mathrm{gate}}(z)
+\;=\;
+\mathbb{1}\!\left(\pi(z) + b_{\mathrm{gate}} > 0\right)
+\odot
+\mathrm{ReLU}\!\left(\exp(r)\odot\pi(z) + b_{\mathrm{mag}}\right),
+\label{eq:gated-sae}
+\end{equation}
+where $r \in \mathbb{R}^{d_{\mathrm{SAE}}}$ is a learned rescaling. The loss is:
+\begin{equation}
+\mathcal{L}_{\mathrm{Gated}}
+\;=\;
+\|\mathrm{SAE}(z) - z\|_2^2
+\;+\;
+\lambda_{\ell_1}\,\|\mathrm{ReLU}(\pi(z) + b_{\mathrm{gate}})\|_1
+\;+\;
+\|\hat{z}_{\mathrm{gate}}(z) - z\|_2^2,
+\label{eq:gated-loss}
+\end{equation}
+where $\hat{z}_{\mathrm{gate}}$ is the reconstruction using only the gate pathway.
+ 
+\paragraph{JumpReLU SAE~\citep{rajamanoharan2024jumprelu}.}
+Replaces the ReLU with a per-unit learned threshold $\theta = \exp(\log\theta)$,
+$\log\theta \in \mathbb{R}^{d_{\mathrm{SAE}}}$, applied as a hard shrinkage:
+\begin{equation}
+h(z) \;=\; \pi(z) \odot \mathbb{1}\!\left(\pi(z) > \theta\right),
+\qquad
+\pi(z) \;=\; W_E^{\top}(z - b_D) + b_E ,
+\label{eq:jumprelu-sae}
+\end{equation}
+and trained against a hard $L_0$ penalty rather than an $\ell_1$ surrogate:
+\begin{equation}
+\mathcal{L}_{\mathrm{JumpReLU}}
+\;=\;
+\|\mathrm{SAE}(z) - z\|_2^2
+\;+\;
+\lambda_{L_0}\,\left\|h(z)\right\|_0 .
+\label{eq:jumprelu-loss}
+\end{equation}
+Both the threshold gate and the $L_0$ count are piecewise constant in $\theta$, so
+neither term supplies a gradient to $\log\theta$ directly. We follow the
+straight-through estimator of \citet{rajamanoharan2024jumprelu}, substituting a
+rectangle kernel of bandwidth $\varepsilon$ centred on the threshold in the backward
+pass. Writing $K_\varepsilon(u) = \tfrac{1}{\varepsilon}\mathbb{1}(|u| < \tfrac{\varepsilon}{2})$,
+the surrogate gradients are
+\begin{equation}
+\frac{\partial h_j}{\partial \theta_j}
+\;\approx\;
+-\,\theta_j\, K_\varepsilon\!\left(\pi_j(z) - \theta_j\right),
+\qquad
+\frac{\partial \|h(z)\|_0}{\partial \theta_j}
+\;\approx\;
+-\,\theta_j\, K_\varepsilon\!\left(\pi_j(z) - \theta_j\right).
+\label{eq:jumprelu-ste}
+\end{equation}
+The forward pass uses the exact hard threshold and the exact integer $L_0$; only the
+backward pass is relaxed. This distinction matters in our setting: a sigmoid relaxation
+in the forward pass would make the reported sparsity a soft approximation rather than
+the realised one.
+
+\paragraph{Matryoshka SAE~\citep{bussmann2025matryoshka,zaremba2025msae}.}
+Enforces a nested hierarchy via prefix-truncated reconstructions. Given prefix sizes $m_1 < m_2 < \cdots < m_M = d_{\mathrm{SAE}}$, let $h_{1:m}(z)$ retain only the first $m$ latent entries:
+\begin{equation}
+\mathcal{L}_{\mathrm{Mat}}
+\;=\;
+\sum_{k=1}^{M} \alpha_k
+\left[
+\left\|W_D^{\top} h_{1:m_k}(z) + b_D - z\right\|_2^2
++ \lambda_{\ell_1}\,\|h_{1:m_k}(z)\|_1
+\right].
+\label{eq:matryoshka-loss}
+\end{equation}
+ 
+\paragraph{PatchSAE~\citep{lim2024patchsae}.}
+Uses the ReLU objective (Eq.~\eqref{eq:relu-sae}) trained on patch tokens. For neuron $s$ on image $i$, patch-level and image-level activation counts are:
+\begin{equation}
+a_{ij}[s] \;=\; \mathbb{1}\!\left(h_{ij}[s] > \tau\right),
+\qquad
+a_i[s] \;=\; \sum_{j=1}^{N} a_{ij}[s].
+\label{eq:activation-counts}
+\end{equation}
+ 
+ 
+\subsection{Metric Definitions}
+\label{app:metrics}
+
+\[
+L_0(z) = \|z\|_0 = \sum_{j=1}^{m} \mathbf{1}\{z_j \neq 0\}.
+\]
+
+For a sparse autoencoder (SAE), if \(z \in \mathbb{R}^m\) is the latent activation vector, then \(L_0(z)\) counts how many latent features are active.
+
+A dataset-level version is given by
+
+\begin{equation}
+L_0
+=
+\frac{1}{N}
+\sum_{i=1}^{N}
+\|z_i\|_0
+=
+\frac{1}{N}
+\sum_{i=1}^{N}
+\sum_{j=1}^{m}
+\mathbf{1}\{z_{ij} \neq 0\},
+\end{equation}
+where \(z_i\) is the SAE latent activation for input \(x_i\). Lower \(L_0\) indicates sparser activations.
+ 
+\paragraph{Reconstruction fidelity.}
+\begin{equation}
+E_{\mathrm{rec}} \;=\; \mathbb{E}\!\left[\|\mathrm{SAE}(z) - z\|_2^2\right].
+\label{eq:recon-error}
+\end{equation}
+ 
+\paragraph{Activated frequency.}
+\begin{equation}
+\mathrm{Freq}[s]
+\;=\;
+\frac{\left|\{i \in \mathcal{I} : h_i[s] > 0\}\right|}{|\mathcal{I}|}.
+\label{eq:freq}
+\end{equation}
+ 
+\paragraph{Mean activation.}
+\begin{equation}
+\mathrm{MeanAct}[s]
+\;=\;
+\frac{1}{\left|\{i \in \mathcal{I} : h_i[s] > 0\}\right|}
+\sum_{\substack{i \in \mathcal{I} \\ h_i[s] > 0}} h_i[s].
+\label{eq:meanact}
+\end{equation}
+ 
+\paragraph{Label entropy.}
+For latent $s$ with reference set $R_s$ (top-$k$ images by image-level activation), let $\mathrm{sum}_c = \sum_{i \in R_s : y_i = c} h_i[s]$ and $p_c = \mathrm{sum}_c / \sum_{c'} \mathrm{sum}_{c'}$:
+\begin{equation}
+\mathrm{Ent}[s]
+\;=\;
+-\sum_{c \in \mathcal{C}} p_c \log p_c.
+\label{eq:entropy}
+\end{equation}
+ 
+\paragraph{Monosemanticity.}
+Let $x_i$ be the CLIP embedding of image $i$ and $z_i^{h} \geq 0$ the activation of latent $h$ on $i$:
+\begin{equation}
+\mathrm{MS}_h
+\;=\;
+\frac{\sum_{i<j} z_i^{h} z_j^{h} \cos(x_i, x_j)}{\sum_{i<j} z_i^{h} z_j^{h}}.
+\label{eq:monosemanticity}
+\end{equation}
+
+
+\subsection{SAE statistics and architecture ablations}
+
+\input{tables/sae_stats}
+
+
+
+
+\begin{table}[h]
+\centering
+\caption{\textbf{H1 (additional benchmarks): Classification accuracy (\%) on OfficeHome, KITTI, and Cityscapes.}
+$\bar{S}$: generic/base SAE. $\hat{S}$: domain-matched SAE (LoRASAE).
+The generic SAE degrades after LoRA adaptation, while the FT-SAE partially recovers performance.}
+\label{tab:h1_additional}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Configuration} & \textbf{OfficeHome} & \textbf{KITTI} & \textbf{Cityscapes} \\
+\midrule
+ZS                          & 83.02 & 32.78 & 11.2  \\
+LoRA-FT                     & 87.25 & 64.72 & 47.6  \\
+\midrule
+ZS + $\bar{S}$              & 62.30 & 21.50 & 11.2  \\
+LoRA-FT + $\bar{S}$         & 69.45 & 58.70 & \phantom{0}6.5  \\
+LoRA-FT + $\hat{S}$         & \bf86.90 & \bf61.67 & \bf42.01 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+\begin{figure*}[!htbp]
+    \centering
+    \includegraphics[width=\linewidth]{figures/l0_sparsity.pdf}
+    \caption{\textbf{$L_0$ active neurons per image: generic ($\bar{S}$, dashed) vs.\ FT-SAE.}
+    Log-scale $y$-axis; shaded bands mark domain tiers.
+    FT-SAE are generally sparser, with larger reductions on shifted domains.
+    Red fill marks the single anomaly where $\hat{S}$ activates \emph{more} neurons
+    (DINO PathMNIST $L_0$: $9{,}185\!\to\!9{,}676$): DINOv2's language-free features
+    are not sparse-decomposable on medical imagery.}
+    \label{fig:l0_sparsity}
+\end{figure*}
+
+\begin{figure*}[!htbp]
+    \centering
+    \includegraphics[width=\linewidth]{figures/dead_fraction.pdf}
+    \caption{\textbf{Dead-neuron fraction: generic ($\bar{S}$, dashed) vs.FT-SAE.}
+    FT-SAEs reduce dead neurons on most benchmarks ($-31\%$ avg.\ near-domain).
+    The EuroSAT spike (CLIP: $0.16\!\to\!0.81$, annotated) is an instance of
+    domain specialisation: the FT-SAE concentrates signal into a small
+    set of satellite-specific neurons while leaving the rest dormant.}
+    \label{fig:dead_fraction}
+\end{figure*}
+
+\begin{figure*}[!htbp]
+    \centering
+    \includegraphics[width=\linewidth]{figures/cossim_bars.pdf}
+    \caption{\textbf{Cosine similarity by domain tier: G-SAE vs. FT-SAE}
+    Bars show per-tier averages; $\Delta$ labels give Specific$-$Generic (green = improvement).
+    SigLIP and ALIGN improve on all four tiers.
+    The Far-domain regression for CLIP is driven entirely by PathMNIST, ChestMNIST:
+    the FT-SAE's features are orthogonal to the pretraining dictionary
+    yet more useful for classification (Table~\ref{tab:main_accuracy_abs}),
+    suggesting that CosSim with the base feature space can be misleading under large shift.}
+    \label{fig:cossim_bars}
+\end{figure*}
+
+
+\begin{figure}[!htbp]
+
+    \includegraphics[width=\linewidth]{figures/label_entropy_lines.png}
+    \vspace{0.6em}
+    \caption{\textbf{Label entropy (H2): weighted per-neuron label entropy $\hat{H}_w$ for
+    generic ($\bar{S}$) vs.\ domain-matched ($\hat{S}$) SAE, ordered by MMD distance
+    from ImageNet.}
+    \emph{Top:} Base SAE entropy remains uniformly high ($0.93$--$0.98$) across all domains,
+    while the LoRA SAE diverges sharply on far-domain benchmarks
+    (PathMNIST: $\Delta\hat{H}_w = -0.237$).
+    \emph{Bottom:} Entropy reduction grows with domain distance, consistent with H4.
+    The near-domain cluster (Caltech101, CUB-200, DTD) shows modest reductions
+    ($-0.016$ to $-0.040$); EuroSAT is intermediate ($-0.049$);
+    PathMNIST is an order of magnitude larger.}
+    \label{fig:label_entropy}
+  
+\end{figure}
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[height=40mm]{figures/makeup.drawio.png}
+\vspace{3mm}
+
+    \includegraphics[height=40mm]{figures/sample_001_Surfing.png}
+\vspace{3mm}
+
+    \includegraphics[height=40mm]{figures/scale.drawio.png}
+ \vspace{3mm}
+
+   \includegraphics[height=40mm]{figures/handstand.drawio.png}
+   
+%    \vspace{0.6em}
+    \caption{\textbf{Top-activating images.} Example images with high activation for selected SAE latents. 1st input is a woman applying makeup, 2nd row is surfing image, 3rd input is scales(DTD) and last input is Handstand(UCF101)}
+    \label{fig:top_activating_images}
+\end{figure}
+
+
+\input{tables/lora_sae2}
+
+\input{tables/lora_sae3}
+
+\input{tables/lora_sae4}
+
+\input{tables/dora_sae}
+
+\input{tables/dora_sats}
+
+
+
+
+\subsection{Predicting when a generic SAE needs retraining}
+\label{app:when-to-retrain}
+
+The main text establishes that generic-SAE degradation grows with domain distance. A
+practitioner needs something stronger than that trend: a rule for deciding, before
+paying for SAE training, whether the generic dictionary can simply be reused. This
+appendix builds one and reports honestly on where it holds.
+
+\paragraph{Embedding distance alone does not survive more domains.}
+Extending the development cohort from six to eight domains does not strengthen the
+$\mathrm{MMD}^2 \rightarrow$ degradation relationship, it removes it: apparent $R^2$
+falls from $0.161$ to $0.004$. Table~\ref{tab:concept_gap} shows why. Oxford~Pets has
+the largest embedding distance in the cohort and one of the smallest degradations,
+inverting the hypothesis, and its Cook's distance ($1.63$) is five times the next
+domain's --- a single point bending the entire fit.
+
+\paragraph{Concept distance explains the anomaly.}
+Raw embedding MMD~\citep{gretton2012kernel} conflates two things: how different a
+domain's \emph{images} look, and how different its \emph{concepts} are from those the
+dictionary was fit on. ImageNet-1k already contains roughly $120$ dog breeds and many
+cat classes, so Oxford~Pets can be stylistically distant while being conceptually
+redundant. We therefore measure a second quantity, \texttt{concept\_gap}: embed each
+target class name and all $1000$ ImageNet-1k class names with the CLIP text encoder,
+and average, over target classes, the cosine distance to the nearest ImageNet class.
+Oxford~Pets has the lowest \texttt{concept\_gap} of all eight domains, and CUB-200 --- a
+fine-grained bird taxonomy with no good ImageNet-1k analogue --- the highest, matching
+its high degradation. Across every association measure in Table~\ref{tab:concept_gap},
+\texttt{concept\_gap} dominates $\mathrm{MMD}^2$, including a positive leave-one-domain-out
+$R^2$ where the MMD fit is strongly negative.
+
+\paragraph{A decision rule, selected out-of-sample.}
+Table~\ref{tab:degradation_regressor} fits every subset of
+$\{\mathrm{MMD}^2, \texttt{concept\_gap}, n_{\mathrm{classes}}\}$ and selects by LODO
+$R^2$ rather than in-sample fit. The chosen model is
+\begin{equation}
+\widehat{\mathrm{degradation}}_{\mathrm{pp}}
+\;=\;
+-6.83 \;+\; 8.72\,\mathrm{MMD}^2 \;+\; 51.56\,\texttt{concept\_gap},
+\label{eq:decision-rule}
+\end{equation}
+with LODO $R^2 = 0.621$ and LODO MAE $2.43$\,pp. Read against the $3.65$\,pp
+self-degradation floor of Table~\ref{tab:imagenet_baseline}, it gives the retrain/reuse
+call correctly in $7/8$ domains using only quantities measurable before any SAE is
+trained (Table~\ref{tab:decision_rule}).
+
+\paragraph{Limits of this rule, stated plainly.}
+\texttt{concept\_gap} was constructed \emph{after} observing the Oxford~Pets anomaly, not
+pre-registered. That is a genuine garden-of-forking-paths risk, mitigated --- but not
+removed --- by the fact that a specific named anomaly motivated it rather than a blind
+search over candidate predictors. Neither the predictor nor
+Eq.~\eqref{eq:decision-rule} has been scored against the three domains held out for
+confirmatory testing (OfficeHome, KITTI, Cityscapes); LODO resamples within the same
+eight domains that generated the hypothesis. At $n=8$ with two predictors only five
+residual degrees of freedom remain, and the $3.65$\,pp floor is itself a single-run point
+estimate rather than a validated threshold. We report Eq.~\eqref{eq:decision-rule} as a
+candidate rule with real out-of-sample support, not as a validated instrument.
+
+
+\input{tables/rebuttal_predictor}
+\input{tables/rebuttal_regressor}
+\input{tables/rebuttal_decision_rule}
+\input{tables/rebuttal_imagenet}
+
+\subsection{Are generic-SAE latents causally load-bearing?}
+\label{app:causal}
+
+Every degradation measure elsewhere in this paper --- accuracy, reconstruction fidelity,
+entropy, DAMS --- is correlational. Each is consistent with the generic dictionary being
+merely a somewhat worse \emph{description} of the adapted model. The experiments here
+test the stronger claim directly, by intervening on latents and measuring what the model
+does.
+
+\paragraph{Single-latent interventions.}
+Table~\ref{tab:causal_steering} ablates and amplifies the top-activating latent per
+class on LoRA-adapted CLIP. The edit is error-preserving, $x' = x + W_D^{\top}(z' - z)$,
+so leaving $z$ unmodified is an exact no-op and no part of the measured effect is
+reconstruction noise; every effect is reported against a control latent matched on
+activity frequency. The generic dictionary's own effect interval covers zero in all four
+cells. The finetuned dictionary's is larger in all four and significantly larger than the
+generic one's in three.
+
+\paragraph{Multi-latent necessity and sufficiency.}
+Table~\ref{tab:h5_steering} generalises the same machinery to top-$k$ latent sets across
+four domains spanning the distance range. Necessity --- how much correct classification
+depends on a class's top latents, over a random-latent control --- tracks domain distance
+with rank correlation $\rho = 1.0$ at both $k$, reproducing the same
+no-benefit-near, growing-benefit-far pattern that Table~\ref{tab:init_ablation} and the
+distance-zero anchor find independently. Sufficiency does not: amplification shows no
+reliable trend, and the farthest domain has a slightly negative sufficiency gap. We
+report this rather than averaging the two into a single steerability score; whether a
+latent is \emph{necessary} for a decision and whether it can be \emph{forced} to drive one
+are different questions and behave differently here.
+
+\paragraph{Caveats.} Both experiments use one SAE training seed per dataset. Confidence
+intervals are bootstrapped over evaluation examples, not over training seeds, so whether
+these causal effects are stable across SAE initialisations is untested. Per-class tests
+in Table~\ref{tab:h5_steering} ($n=6$ per dataset) are underpowered; the informative unit
+is the dataset-level rank correlation.
+
+
+\input{tables/rebuttal_steering}
+\input{tables/rebuttal_h5}
+
+\subsection{Initialisation: checkpoint versus scratch}
+\label{app:init}
+
+A natural objection to finetuned SAEs is that the benefit may come entirely from having
+target-domain data, with the generic checkpoint contributing nothing.
+Table~\ref{tab:init_ablation} separates the two across three domains $\times$ three seeds
+$\times$ two arms. The answer is conditional rather than categorical: near the
+pretraining distribution the two arms are statistically indistinguishable, and the
+scratch-trained SAE in fact has the tighter and higher FVE estimate; at moderate and far
+distance the checkpoint-initialised arm wins clearly, and does so more consistently in
+reconstruction fidelity than in raw accuracy. \texttt{dead\_frac} is too seed-variable at
+$n=3$ to support a claim either way.
+
+
+\input{tables/rebuttal_init}
+
+\subsection{Is DAMS an artefact of the chosen taxonomy?}
+\label{app:dams-coarse}
+
+DAMS depends in part on class separability, which invites the objection that its ranking
+could flip under a different but equally reasonable label taxonomy. We predeclared
+coarser groupings for EuroSAT and PathMNIST and recomputed DAMS on the same activations,
+changing only the grouping. Table~\ref{tab:dams_coarsening} shows the ranking of
+$\hat{S}$ over $\bar{S}$ holds in $4/4$ cells, so DAMS's direction is not a taxonomy
+artefact. The size of the gap, however, shrinks by $75\%$ and $50\%$ respectively. Where
+this paper uses DAMS gap magnitude rather than sign, that magnitude should be read as
+taxonomy-dependent.
+
+
+\input{tables/rebuttal_dams}
+
+\subsection{Generality across backbones, SAE architectures, and adaptation methods}
+\label{app:generality}
+
+The main results use CLIP with LoRA and ReLU/Gated dictionaries. This appendix reports a
+wider matrix run to test whether the pipeline --- and the masked-finetuning procedure in
+particular --- is specific to that configuration.
+
+\paragraph{Setup.} Three additional vision encoders were added: DINOv2, which has no
+text tower; ALIGN, whose EfficientNet vision tower emits a convolutional feature map
+rather than a token sequence and is hooked as a pseudo-sequence; and SigLIP2. Two
+additional SAE architectures were added, Top-$k$ (Eq.~\eqref{eq:topk-sae}) and JumpReLU
+(Eq.~\eqref{eq:jumprelu-sae}). Two additional adaptation methods were added: MaPLe and
+VPT-Deep.
+
+\paragraph{Generic dictionaries transfer to all three encoders.}
+Table~\ref{tab:expanded_base_sae} reports the six generic dictionaries. The clearest
+architectural finding is about \emph{data} rather than reconstruction: JumpReLU's learned
+per-unit threshold needs substantially more training tokens to settle than Top-$k$'s
+fixed structural sparsity, gaining roughly $45\%$ in MSE from a $20\times$ budget
+increase against Top-$k$'s $25$--$40\%$. We deliberately do not read the absolute MSE gap
+between the two as an architectural ranking, because the two are not matched on
+sparsity.
+
+\paragraph{Masked finetuning is architecture- and backbone-agnostic.}
+Table~\ref{tab:expanded_masked_ft} adapts each dictionary to nine targets with its
+top-$20\%$ most-active units frozen. The procedure runs unchanged across all
+combinations, including JumpReLU, whose learned $\log\theta$ has to be masked and
+restored alongside the encoder and decoder weights or protection is silently violated
+for exactly the units the method exists to preserve. We verified protected parameters
+bitwise identical before and after every optimiser step. One implementation
+consequence is worth recording: Top-$k$ selection is global across all $d_{\mathrm{SAE}}$
+units per token, so the split free/protected forward pass used as an optimisation for
+ReLU dictionaries would select a different top-$k$ than the dense forward. For Top-$k$
+this is a correctness constraint, not a performance trade-off, and the dense path is
+mandatory.
+
+\paragraph{Prompt-based adaptation, and what it cannot reach.}
+Tables~\ref{tab:expanded_vpt} and~\ref{tab:expanded_maple} report VPT and MaPLe. The
+coverage asymmetry between them is itself the result: MaPLe's deep visual prompts are
+coupled to a paired text tower through a learned projection, so it applies to CLIP alone
+among our encoders, while VPT's linear-probe formulation extends to any backbone with a
+patch-token sequence --- covering DINOv2, which no other adaptation method in this study
+can reach, and excluding ALIGN for the same structural reason MaPLe excludes it.
+MaPLe's near-zero movement on \texttt{medmnist} ($16.91 \rightarrow 16.38$ at three
+epochs) against LoRA's substantial gains on the same data is the accuracy-level shadow of
+the mechanistic asymmetry discussed in the main text: steering existing features has
+little to grip when the target vocabulary is far outside the pretraining distribution.
+
+\paragraph{Scope of these numbers.}
+Three limits apply. Reconstruction figures in
+Tables~\ref{tab:expanded_base_sae} and~\ref{tab:expanded_masked_ft} are final
+\emph{training} losses on the activations each dictionary was fit to; they measure fit,
+not generalisation, and no held-out reconstruction or downstream probe has been run for
+this matrix. The reduced and full budgets are separate runs on differently loaded
+hardware and should not be compared across columns except where the table does so
+explicitly. Finally, the masked-finetuning runs for the three new encoders adapt their
+dictionaries against un-adapted backbone weights rather than LoRA-adapted ones, since
+adapter loading is wired only for CLIP --- a valid condition, but a different one from
+the CLIP+LoRA setting of the main results.
+
+
+\input{tables/expanded_base_sae}
+\input{tables/expanded_masked_ft}
+\input{tables/expanded_vpt}
+\input{tables/expanded_maple}

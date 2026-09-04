@@ -11,6 +11,7 @@ import torch
 import wandb
 from datasets import load_dataset
 
+from src.sae_training.backbone_registry import get_backbone_spec
 from src.sae_training.config import ViTSAERunnerConfig
 from src.sae_training.sae_trainer import SAETrainer
 from src.sae_training.sparse_autoencoder import SparseAutoencoder
@@ -27,12 +28,20 @@ if __name__ == "__main__":
     parser.add_argument("--class_token", action="store_true", default=None)
     parser.add_argument("--image_width", type=int, default=224)
     parser.add_argument("--image_height", type=int, default=224)
+    parser.add_argument("--backbone", type=str, default="clip",
+                        choices=["clip", "dino", "align", "siglip2"],
+                        help="Which registered architecture family to load --model_name as "
+                             "(ignored when --vit_type maple).")
     parser.add_argument(
-        "--model_name", type=str, default="openai/clip-vit-base-patch16"
+        "--model_name", type=str, default=None,
+        help="HF model id. Defaults to the --backbone's registered default.",
     )
     parser.add_argument("--module_name", type=str, default="resid")
     parser.add_argument("--block_layers", type=int, nargs="+", default=[-3])
-    parser.add_argument("--clip_dim", type=int, default=768)
+    parser.add_argument("--clip_dim", type=int, default=None,
+                        help="Deprecated alias for --d_in, kept for backward compatibility.")
+    parser.add_argument("--d_in", type=int, default=None,
+                        help="SAE input dim. Defaults to the --backbone's registered hidden_dim.")
 
     parser.add_argument("--dataset", type=str, default="imagenet")
     parser.add_argument("--use_cached_activations",
@@ -42,6 +51,14 @@ if __name__ == "__main__":
     parser.add_argument("--b_dec_init_method", type=str,
                         default="geometric_median")
     parser.add_argument("--gated_sae", action="store_true", default=None)
+    parser.add_argument("--topk_sae", action="store_true", default=None,
+                        help="Use a Top-K SAE (Gao et al. 2024) instead of standard ReLU+L1.")
+    parser.add_argument("--topk_k", type=int, default=32)
+    parser.add_argument("--jumprelu_sae", action="store_true", default=None,
+                        help="Use a JumpReLU SAE (Rajamanoharan et al. 2024) instead of standard ReLU+L1.")
+    parser.add_argument("--jumprelu_bandwidth", type=float, default=0.001)
+    parser.add_argument("--jumprelu_init_threshold", type=float, default=0.001)
+    parser.add_argument("--jumprelu_l0_coefficient", type=float, default=1e-3)
     # Training Parameters
     parser.add_argument("--lr", type=float, default=0.0004)
     parser.add_argument("--l1_coefficient", type=float, default=0.00008)
@@ -91,6 +108,12 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    backbone_spec = get_backbone_spec("maple" if args.vit_type == "maple" else args.backbone)
+    if args.model_name is None:
+        args.model_name = backbone_spec.default_model_id
+    if args.d_in is None:
+        args.d_in = args.clip_dim if args.clip_dim is not None else backbone_spec.hidden_dim
+
     saes = {args.block_layers[i]: None for i in range(len(args.block_layers))}
 
     for block_layer in args.block_layers:
@@ -106,10 +129,16 @@ if __name__ == "__main__":
             label_key="label",
             use_cached_activations=args.use_cached_activations,
             cached_activations_path=args.cached_activations_path,
-            d_in=args.clip_dim,
+            d_in=args.d_in,
             expansion_factor=args.expansion_factor,
             b_dec_init_method=args.b_dec_init_method,
             gated_sae=args.gated_sae,
+            topk_sae=args.topk_sae,
+            topk_k=args.topk_k,
+            jumprelu_sae=args.jumprelu_sae,
+            jumprelu_bandwidth=args.jumprelu_bandwidth,
+            jumprelu_init_threshold=args.jumprelu_init_threshold,
+            jumprelu_l0_coefficient=args.jumprelu_l0_coefficient,
             lr=args.lr,
             l1_coefficient=args.l1_coefficient,
             lr_scheduler_name=args.lr_scheduler_name,
@@ -151,6 +180,7 @@ if __name__ == "__main__":
             args.model_path,
             args.config_path,
             classnames,
+            arch=args.backbone,
         )
 
         print("Initializing ViTActivationsStore")

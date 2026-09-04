@@ -1,0 +1,58 @@
+{
+  "eurosat": {
+    "scratchsae": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/eurosat/9807wpnz/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/eurosat/mvqo23bh/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked_gated": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all_gated/eurosat/6q3edo25/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "gsae_gated": "out/checkpoints/gsae_gated/ulu2kq21/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "pets": {
+    "scratchsae": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/pets/1rht5747/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/pets/2hdd1yfl/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "caltech101": {
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/caltech101/qelj0xrl/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked_gated": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all_gated/caltech101/eskrbw7t/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "gsae_gated": "out/checkpoints/gsae_gated/ulu2kq21/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "cub2002011": {
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/cub2002011/a4mbv637/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked_gated": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all_gated/cub2002011/jufd5l4h/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "gsae_gated": "out/checkpoints/gsae_gated/ulu2kq21/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "dtd": {
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/dtd/tokty2q3/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked_gated": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all_gated/dtd/9e6v748a/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "gsae_gated": "out/checkpoints/gsae_gated/ulu2kq21/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "kitti": {
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/kitti/b0fda336/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked_gated": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all_gated/kitti/66i2amho/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "gsae_gated": "out/checkpoints/gsae_gated/ulu2kq21/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "pathmnist": {
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/pathmnist/j1j8vpa8/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "officehome": {
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/officehome/ckkfri2x/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked_gated": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all_gated/officehome/1czhr9dn/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "gsae_gated": "out/checkpoints/gsae_gated/ulu2kq21/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "ucf101": {
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/ucf101/8avvvzey/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked_gated": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all_gated/ucf101/t9e1tn3n/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "gsae_gated": "out/checkpoints/gsae_gated/ulu2kq21/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "fgvc": {
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/fgvc/ztd5s2eg/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked_gated": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all_gated/fgvc/9dpedphr/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "gsae_gated": "out/checkpoints/gsae_gated/ulu2kq21/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "cityscapes": {
+    "masked": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all/cityscapes/h1hotol3/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "masked_gated": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/masked_finetune_all_gated/cityscapes/91662cxb/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
+    "gsae_gated": "out/checkpoints/gsae_gated/ulu2kq21/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  },
+  "imagenet_anchor": {
+    "ftsae": "/home/sunayana/Documents/Concept_LoRA/patchsae/out/checkpoints/imagenet_anchor/ftsae/seed42/k3i8yoyk/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt"
+  }
+}

@@ -1,0 +1,34 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{The generic SAE degrades even on its own training domain.}
+\emph{Left:} base (unadapted) CLIP ViT-B/16 on a class-stratified 2{,}000-image
+ImageNet-1k validation sample, with and without $\bar{S}$ in the loop. The $66.60\%$
+no-SAE figure is consistent with CLIP ViT-B/16's published zero-shot accuracy.
+\emph{Right:} the same measurement after LoRA-adapting on ImageNet itself
+(296 images/class), i.e.\ at domain distance zero by construction. Two consequences
+follow. First, $3.65$\,pp is a \emph{noise floor}: caltech101's $1.33$\,pp
+(Table~\ref{tab:concept_gap}) sits below it and should be read as no detectable
+degradation. Second, at distance zero the finetuned SAE buys nothing ($-0.66$\,pp,
+single seed), independently corroborating Table~\ref{tab:init_ablation}.}
+\label{tab:imagenet_baseline}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lc@{\hskip 5mm}lc}
+\toprule
+\multicolumn{2}{c}{\textbf{Base CLIP, ImageNet}} & \multicolumn{2}{c}{\textbf{LoRA-ImageNet anchor}} \\
+\cmidrule(r){1-2}\cmidrule(l){3-4}
+\textbf{Condition} & \textbf{Acc.\ (\%)} & \textbf{Condition} & \textbf{Acc.\ (\%)} \\
+\midrule
+ZS                & 66.60 & LoRA-FT               & 76.89 \\
+ZS $+\ \bar{S}$   & 62.95 & LoRA-FT $+\ \bar{S}$  & 71.33 \\
+\emph{Degradation} & \bf 3.65 & LoRA-FT $+\ \hat{S}$ & 70.67 \\
+\midrule
+\multicolumn{4}{l}{\emph{Full SAE-quality suite for ZS $+\ \bar{S}$}} \\
+\multicolumn{2}{l}{\quad $L_0$ (active feats./token)} & \multicolumn{2}{l}{149.1} \\
+\multicolumn{2}{l}{\quad Dead fraction}               & \multicolumn{2}{l}{0.018} \\
+\multicolumn{2}{l}{\quad Reconstruction CosSim}       & \multicolumn{2}{l}{0.908} \\
+\multicolumn{2}{l}{\quad Fraction variance explained} & \multicolumn{2}{l}{0.941} \\
+\multicolumn{2}{l}{\quad Label entropy (top-1000)}    & \multicolumn{2}{l}{3.164} \\
+\bottomrule
+\end{tabular}
+\end{table}

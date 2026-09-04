@@ -1,0 +1,11 @@
+dataset,distance_dataset,mmd_available,paired_outcome_available,adapter_checkpoint,evaluation_status,blocker
+imagenet-r,imagenet-r,true,false,../unified_weights/vitb16/imagenet_r/16shots/seed1/lora_adapter_weights.pt,blocked_on_semantic_classname_mapping,WordNet folder IDs require canonical ImageNet category names for CLIP prompts
+imagenetv2,imagenetv2,true,false,../unified_weights/vitb16/imagenet_v2/16shots/seed1/lora_adapter_weights.pt,blocked_on_semantic_classname_mapping,Numeric ImageNet folder IDs require canonical ImageNet category names for CLIP prompts
+flowers102,flowers102,true,false,../unified_weights/vitb16/oxford_flowers/16shots/seed1/lora_adapter_weights.pt,blocked_on_semantic_classname_mapping,Numeric folder IDs require the Oxford Flowers category-name mapping
+imagenet-a,imagenet-a,true,false,../unified_weights/vitb16/imagenet_a/16shots/seed1/lora_adapter_weights.pt,blocked_on_semantic_classname_mapping,WordNet folder IDs require canonical ImageNet category names for CLIP prompts
+imagenet-o,imagenet-o,true,false,,blocked_on_missing_clip_lora_checkpoint_and_classnames,No local CLIP ViT-B/16 LoRA checkpoint and WordNet folder IDs require semantic names
+sketch,sketch,true,false,../unified_weights/vitb16/imagenet_sketch/16shots/seed1/lora_adapter_weights.pt,blocked_on_semantic_classname_mapping,WordNet folder IDs require canonical ImageNet category names for CLIP prompts
+pathmnist,pathmnist,true,false,../lora_weights/vitb16/medmnist/16shots/seed1/lora_weights.pt,ready_now_as_registry_name_pathmnist,
+oxford_pets,oxford_pets,true,false,../lora_weights/vitb16/oxford_pets/16shots/seed1/lora_weights.pt,ready_now_as_registry_name_pets,
+stanford_cars,stanford_cars,true,false,../unified_weights/vitb16/stanford_cars/16shots/seed1/lora_adapter_weights.pt,blocked_on_dataset_loader_and_semantic_classnames,Local data are parquet shards and require a loader plus the Stanford Cars class-name mapping
+food101,food101,true,false,../unified_weights/vitb16/food101/16shots/seed1/lora_adapter_weights.pt,blocked_on_dataset_loader,Local data are parquet shards but eval_matrix currently supports only ImageFolder and MedMNIST NPZ

@@ -46,6 +46,7 @@ try:
         MaskedSAETrainer,
         compute_protected_mask,
     )
+    from src.sae_training.backbone_registry import get_backbone_spec
     from src.sae_training.sparse_autoencoder import SparseAutoencoder
     from src.sae_training.utils import get_scheduler
     from src.sae_training.vit_activations_store import ViTActivationsStore
@@ -103,11 +104,19 @@ def main():
     )
 
     # --- Model ---
-    parser.add_argument("--model_name", type=str, default="openai/clip-vit-base-patch16")
+    parser.add_argument("--backbone", type=str, default="clip",
+                        choices=["clip", "dino", "align", "siglip2"],
+                        help="Which registered architecture family to load --model_name as "
+                             "(ignored when --vit_type maple, which is always CLIP-based).")
+    parser.add_argument("--model_name", type=str, default=None,
+                        help="HF model id. Defaults to the --backbone's registered default.")
     parser.add_argument("--module_name", type=str, default="resid")
     parser.add_argument("--block_layer", type=int, default=-3,
                         help="Transformer block layer (negative = from end)")
-    parser.add_argument("--clip_dim", type=int, default=768)
+    parser.add_argument("--clip_dim", type=int, default=None,
+                        help="Deprecated alias for --d_in, kept for backward compatibility.")
+    parser.add_argument("--d_in", type=int, default=None,
+                        help="SAE input dim. Defaults to the --backbone's registered hidden_dim.")
     parser.add_argument("--class_token", action="store_true", default=None)
     parser.add_argument("--image_width", type=int, default=224)
     parser.add_argument("--image_height", type=int, default=224)
@@ -133,6 +142,14 @@ def main():
     # --- SAE architecture (must match pre-trained SAE) ---
     parser.add_argument("--expansion_factor", type=int, default=64)
     parser.add_argument("--gated_sae", action="store_true", default=None)
+    parser.add_argument("--topk_sae", action="store_true", default=None,
+                        help="Must match the loaded --sae_checkpoint_path's architecture.")
+    parser.add_argument("--topk_k", type=int, default=32)
+    parser.add_argument("--jumprelu_sae", action="store_true", default=None,
+                        help="Must match the loaded --sae_checkpoint_path's architecture.")
+    parser.add_argument("--jumprelu_bandwidth", type=float, default=0.001)
+    parser.add_argument("--jumprelu_init_threshold", type=float, default=0.001)
+    parser.add_argument("--jumprelu_l0_coefficient", type=float, default=1e-3)
 
     # --- Training ---
     parser.add_argument("--lr", type=float, default=0.0004)
@@ -174,6 +191,10 @@ def main():
                         help="Minimum loss improvement to count as progress (default: 1e-5)")
     parser.add_argument("--early_stop_warmup", type=int, default=100,
                         help="Don't check early stopping for this many initial steps (default: 100)")
+    parser.add_argument("--legacy_gradient_masking", action="store_true",
+                        help="Use the old dense-forward + post-hoc gradient-zeroing path "
+                             "instead of the fast split-forward. Only for A/B timing "
+                             "comparisons; the fast path is numerically equivalent and faster.")
 
     # --- Debugging ---
     parser.add_argument("--skip_activation_verify", action="store_true",
@@ -182,6 +203,12 @@ def main():
                         help="Load everything but don't train")
 
     args = parser.parse_args()
+
+    backbone_spec = get_backbone_spec("maple" if args.vit_type == "maple" else args.backbone)
+    if args.model_name is None:
+        args.model_name = backbone_spec.default_model_id
+    if args.d_in is None:
+        args.d_in = args.clip_dim if args.clip_dim is not None else backbone_spec.hidden_dim
 
     # =====================================================================
     # Environment
@@ -227,10 +254,13 @@ def main():
         print(f"[INFO] SAE checkpoint:    {sae_path}")
         print(f"[INFO] MaPLe checkpoint:  {args.model_path}")
         print(f"[INFO] MaPLe config:      {args.config_path}")
-    else:
-        # LoRA mode: validate lora checkpoint
+    elif args.backbone == "clip":
+        # LoRA mode: validate lora checkpoint (only wired up for CLIP so far --
+        # other backbones' LoRA/DoRA adapters, saved by unified_finetune.py,
+        # aren't loadable through this script yet; run base-backbone-only
+        # for those until that bridge exists).
         if not args.lora_checkpoint_path:
-            print("[FATAL] --lora_checkpoint_path is required when --vit_type is not 'maple'")
+            print("[FATAL] --lora_checkpoint_path is required when --vit_type is not 'maple' and --backbone is 'clip'")
             sys.exit(1)
         lora_path = Path(args.lora_checkpoint_path)
         if not lora_path.exists():
@@ -238,6 +268,13 @@ def main():
             sys.exit(1)
         print(f"[INFO] SAE checkpoint:  {sae_path}")
         print(f"[INFO] LoRA checkpoint: {lora_path}")
+    else:
+        if args.lora_checkpoint_path:
+            print(f"[FATAL] --lora_checkpoint_path is not yet supported for --backbone={args.backbone}; "
+                  "omit it to run masked fine-tuning on the base backbone.")
+            sys.exit(1)
+        print(f"[INFO] SAE checkpoint:  {sae_path}")
+        print(f"[INFO] Backbone:        {args.backbone} ({args.model_name}), no adapter (base weights)")
 
     print(f"[INFO] VIT type:        {args.vit_type}")
     print(f"[INFO] Dataset:         {args.dataset}")
@@ -273,6 +310,12 @@ def main():
         expansion_factor=sae.d_sae // sae.d_in,  # match loaded SAE
         b_dec_init_method=args.b_dec_init_method,
         gated_sae=args.gated_sae,
+        topk_sae=args.topk_sae,
+        topk_k=args.topk_k,
+        jumprelu_sae=args.jumprelu_sae,
+        jumprelu_bandwidth=args.jumprelu_bandwidth,
+        jumprelu_init_threshold=args.jumprelu_init_threshold,
+        jumprelu_l0_coefficient=args.jumprelu_l0_coefficient,
         lr=args.lr,
         l1_coefficient=args.l1_coefficient,
         lr_scheduler_name=args.lr_scheduler_name,
@@ -307,8 +350,10 @@ def main():
     print("\n" + "=" * 60)
     if use_maple:
         print("STEP 2: LOAD MaPLe-ADAPTED ViT")
-    else:
+    elif args.lora_checkpoint_path:
         print("STEP 2: LOAD ViT + APPLY LoRA")
+    else:
+        print(f"STEP 2: LOAD BASE {args.backbone.upper()} ViT (no adapter)")
     print("=" * 60)
 
     dataset = load_dataset(**DATASET_INFO[args.dataset])
@@ -317,17 +362,21 @@ def main():
     vit = load_hooked_vit(
         cfg, args.vit_type, args.model_name, args.device,
         args.model_path, args.config_path, classnames,
+        arch=args.backbone,
     )
 
     if use_maple:
         vit.eval()
         print("[DEBUG] MaPLe-adapted ViT loaded. Eval mode.")
-    else:
+    elif args.lora_checkpoint_path:
         print("[DEBUG] Base ViT loaded.")
         vit = load_lora_weights(vit, args.lora_checkpoint_path, args.device)
         vit.eval()
         print("[DEBUG] LoRA applied. ViT in eval mode.")
         verify_model_loaded(vit, args.lora_checkpoint_path, args.device)
+    else:
+        vit.eval()
+        print(f"[DEBUG] Base {args.backbone} ViT loaded (no adapter). Eval mode.")
 
     # =====================================================================
     # Step 3: Build activation store for target dataset
@@ -419,6 +468,7 @@ def main():
             early_stop_patience=args.early_stop_patience,
             early_stop_min_delta=args.early_stop_min_delta,
             early_stop_warmup=args.early_stop_warmup,
+            fast_forward=not args.legacy_gradient_masking,
         )
         trainer.fit()
     except Exception as e:

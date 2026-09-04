@@ -1,41 +1,58 @@
 #!/usr/bin/env python3
 """
-Visualization: Top-M images × Top-N neurons across three SAE conditions.
+t-SNE of SAE latent activations — 3-way SAE comparison.
 
-Viz 1 — tSNE of SAE latent activations, colored by condition:
-           • ZS + BSAE        (zero-shot CLIP  + base ImageNet SAE)
-           • Adapted + BAE    (LoRA CLIP        + base SAE = Cross-SAE)
-           • Adapted + AdSAE  (LoRA CLIP        + domain-adapted SAE)
-         Shows that AdSAE clusters the same images more tightly by concept.
+For each dataset we compare:
+  1. Base backbone + Base SAE
+  2. LoRA backbone + Base SAE   (cross condition)
+  3. LoRA backbone + Adapted SAE
 
-Viz 2 — Image grid of the actual top-activating images per neuron × condition.
-         Shows which images each SAE "sees" as maximally relevant per concept.
+Each condition:
+  1. Run images → get SAE latent vector h per image
+  2. t-SNE on h, color by class
+
+This shows whether improvements come from the LoRA backbone alone,
+the adapted SAE alone, or both together.
 
 Usage:
-    python visualize_neuron_tsne.py \
-        --datasets caltech101 eurosat medmnist dtd ucf101 \
-        --top_n_neurons 8 --top_m_images 6 \
-        --out_dir out/neuron_viz
+    python visualize_latent_tsne.py \
+        --datasets eurosat medmnist caltech101 \
+        --max_images 2000 \
+        --out_dir out/latent_tsne
 """
 
 import argparse
 import os
 import sys
+import random
+import inspect
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List
+from collections import defaultdict
 
 import matplotlib
 matplotlib.use("Agg")
-import matplotlib.gridspec as gridspec
-from matplotlib.lines import Line2D
-import matplotlib.patches as mpatches
-import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 import numpy as np
 import torch
-from PIL import Image
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from sklearn.manifold import TSNE
+from sklearn.decomposition import TruncatedSVD
+from sklearn.metrics import silhouette_score
+
+# Global plotting style tuned for very large, presentation-friendly text.
+plt.rcParams.update({
+    "font.size": 33,
+    "axes.titlesize": 39,
+    "axes.labelsize": 35,
+    "legend.fontsize": 27,
+    "legend.title_fontsize": 29,
+    "figure.titlesize": 41,
+    "xtick.labelsize": 29,
+    "ytick.labelsize": 29,
+})
 
 _ROOT = str(Path(__file__).resolve().parent)
 if _ROOT not in sys.path:
@@ -44,9 +61,9 @@ if _ROOT not in sys.path:
 from src.models.registry import get_backbone
 from src.data.dataset_registry import get_dataset, get_classnames, get_label_key, load_registry
 from src.sae_training.loaders import load_sae, load_lora_weights
-from src.sae_training.sparse_autoencoder import SparseAutoencoder
 
-# ── Dataset / SAE configuration ───────────────────────────────────────────────
+
+# ── Configuration ─────────────────────────────────────────────────────────────
 
 BASE_SAE_PATH  = os.path.join(_ROOT, "out", "sae_weight", "base", "out.pt")
 BASE_SAE_LAYER = -2
@@ -61,7 +78,6 @@ ADSAE_CONFIGS: Dict[str, dict] = {
             "clip-vit-base-patch16_-3_resid_49152.pt"),
         "layer": -3,
         "lora_path": os.path.join(LORA_ROOT, "caltech101", "16shots", "seed1", "lora_weights.pt"),
-        "zs_acc": 92.25, "cross_acc": 83.03, "adsae_acc": 88.05,
     },
     "eurosat": {
         "sae_path": os.path.join(
@@ -70,7 +86,6 @@ ADSAE_CONFIGS: Dict[str, dict] = {
             "clip-vit-base-patch16_-1_resid_49152.pt"),
         "layer": -1,
         "lora_path": os.path.join(LORA_ROOT, "eurosat", "16shots", "seed1", "lora_weights.pt"),
-        "zs_acc": 42.04, "cross_acc": 41.55, "adsae_acc": 83.71,
     },
     "medmnist": {
         "sae_path": os.path.join(
@@ -79,7 +94,6 @@ ADSAE_CONFIGS: Dict[str, dict] = {
             "clip-vit-base-patch16_-2_resid_49152.pt"),
         "layer": -2,
         "lora_path": os.path.join(LORA_ROOT, "medmnist", "16shots", "seed1", "lora_weights.pt"),
-        "zs_acc": 19.8, "cross_acc": 46.7, "adsae_acc": 90.75,
     },
     "dtd": {
         "sae_path": os.path.join(
@@ -88,7 +102,6 @@ ADSAE_CONFIGS: Dict[str, dict] = {
             "clip-vit-base-patch16_-2_resid_49152.pt"),
         "layer": -2,
         "lora_path": os.path.join(LORA_ROOT, "dtd", "16shots", "seed42", "lora_weights.pt"),
-        "zs_acc": 43.6, "cross_acc": 69.07, "adsae_acc": 53.2,
     },
     "ucf101": {
         "sae_path": os.path.join(
@@ -97,48 +110,35 @@ ADSAE_CONFIGS: Dict[str, dict] = {
             "clip-vit-base-patch16_-2_resid_49152.pt"),
         "layer": -2,
         "lora_path": os.path.join(LORA_ROOT, "ucf101", "16shots", "seed1", "lora_weights.pt"),
-        "zs_acc": 64.23, "cross_acc": 42.55, "adsae_acc": 78.2,
-    },
-    "cub2002011": {
-        "sae_path": os.path.join(
-            _ROOT, "out", "checkpoints", "cub2002011", "578p9z8f",
-            "final_sparse_autoencoder_openai",
-            "clip-vit-base-patch16_-2_resid_49152.pt"),
-        "layer": -2,
-        "lora_path": os.path.join(LORA_ROOT, "cub2002011", "16shots", "seed1", "lora_weights.pt"),
-        "zs_acc": None, "cross_acc": None, "adsae_acc": None,
     },
 }
 
-CONDITION_NAMES   = ["ZS + BSAE", "Adapted + BAE\n(Cross-SAE)", "Adapted + AdSAE"]
-CONDITION_SHORT   = ["ZS+BSAE", "Cross-SAE", "AdSAE"]
-CONDITION_COLORS  = ["#4878D0", "#EE854A", "#6ACC65"]
-CONDITION_MARKERS = ["o", "s", "^"]
-NEURON_CMAP       = plt.cm.tab20
+PALETTE = [
+    "#e6194b", "#3cb44b", "#4363d8", "#f58231", "#911eb4",
+    "#42d4f4", "#f032e6", "#bfef45", "#fabed4", "#469990",
+    "#dcbeff", "#9A6324", "#fffac8", "#800000", "#aaffc3",
+    "#808000", "#ffd8b1", "#000075", "#a9a9a9", "#e6beff",
+]
 
 
-# ── Model helpers ──────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
-def load_base_backbone(device: str):
+def load_base_backbone(device):
     bb = get_backbone(BACKBONE_ID, device=device).load()
     bb.model.eval()
     return bb
 
 
-def load_lora_backbone(lora_path: str, device: str):
+def load_lora_backbone(lora_path, device):
     bb = get_backbone(BACKBONE_ID, device=device).load()
-
     class _W:
         def __init__(self, m): self.model = m
-
     load_lora_weights(_W(bb.model), lora_path, device)
     bb.model.eval()
     return bb
 
 
-# ── Feature extraction ────────────────────────────────────────────────────────
-
-def _collate(processor, label_key: str):
+def _collate(processor, label_key):
     def fn(batch):
         imgs   = [item["image"].convert("RGB") for item in batch]
         labels = [item[label_key] for item in batch]
@@ -147,337 +147,312 @@ def _collate(processor, label_key: str):
     return fn
 
 
-@torch.no_grad()
-def extract_sae_latents(backbone, sae, dataset, label_key, layer,
-                         batch_size=64, device="cuda",
-                         num_workers=4, max_images=None):
-    """Run full dataset; return (latents [N,d_sae], labels [N], indices [N])."""
-    if max_images:
-        dataset = dataset.select(range(min(max_images, len(dataset))))
+def get_colors(num_classes):
+    if num_classes <= len(PALETTE):
+        return PALETTE[:num_classes]
+    cmap = plt.cm.turbo
+    return [matplotlib.colors.rgb2hex(cmap(i / max(num_classes - 1, 1)))
+            for i in range(num_classes)]
 
-    loader    = DataLoader(dataset, batch_size=batch_size, shuffle=False,
-                           num_workers=num_workers, pin_memory=(device == "cuda"),
-                           collate_fn=_collate(backbone.processor, label_key))
+
+def stratified_subset(dataset, label_key, max_samples, seed=42):
+    """Class-balanced subset."""
+    if max_samples is None or max_samples >= len(dataset):
+        return dataset
+    labels = dataset[label_key]
+    by_class = defaultdict(list)
+    for idx, lab in enumerate(labels):
+        by_class[int(lab)].append(idx)
+    rng = random.Random(seed)
+    for idxs in by_class.values():
+        rng.shuffle(idxs)
+    class_ids = sorted(by_class.keys())
+    per_class = max(1, max_samples // len(class_ids))
+    selected = []
+    for cid in class_ids:
+        selected.extend(by_class[cid][:per_class])
+    rng.shuffle(selected)
+    return dataset.select(selected[:max_samples])
+
+
+# ── Extract SAE latents ───────────────────────────────────────────────────────
+
+@torch.no_grad()
+def extract_latents(backbone, sae, dataset, label_key, layer,
+                    batch_size=64, device="cuda", num_workers=4):
+    """
+    Run all images through backbone → hook layer → SAE encoder.
+    Returns:
+        latents: (N, d_sae) sparse activation vectors
+        labels:  (N,) class labels
+    """
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=False,
+        num_workers=num_workers, pin_memory=(device == "cuda"),
+        collate_fn=_collate(backbone.processor, label_key),
+    )
     layer_idx = backbone.resolve_layer(layer)
-    cap       = {}
+    cap = {}
 
     def hook(m, i, o):
         hs = o[0] if isinstance(o, tuple) else o
         cap["cls"] = hs.detach().float()[:, 0, :]
 
-    h       = backbone.model.vision_model.encoder.layers[layer_idx].register_forward_hook(hook)
-    lats, lbls, idxs = [], [], []
-    offset  = 0
-    for pv, labels in tqdm(loader, desc="  extract", leave=False):
+    h = backbone.model.vision_model.encoder.layers[layer_idx].register_forward_hook(hook)
+
+    all_latents, all_labels = [], []
+    for pv, labels in tqdm(loader, desc="    extracting latents", leave=False):
         backbone.model.vision_model(pixel_values=pv.to(device))
-        _, lat, _ = sae(cap["cls"])
-        B = lat.shape[0]
-        lats.append(lat.cpu()); lbls.append(labels)
-        idxs.append(torch.arange(offset, offset + B))
-        offset += B
+        _, latents, _ = sae(cap["cls"])  # (B, d_sae)
+        all_latents.append(latents.cpu().float())
+        all_labels.append(labels)
+
     h.remove()
-    return torch.cat(lats), torch.cat(lbls), torch.cat(idxs)
+    return torch.cat(all_latents), torch.cat(all_labels)
 
 
-@torch.no_grad()
-def extract_for_indices(backbone, sae, dataset, label_key, layer,
-                         indices, batch_size=64, device="cuda"):
-    """Extract SAE latents for specific image indices."""
-    sub     = dataset.select(indices)
-    loader  = DataLoader(sub, batch_size=batch_size, shuffle=False,
-                         num_workers=0,
-                         collate_fn=_collate(backbone.processor, label_key))
-    layer_idx = backbone.resolve_layer(layer)
-    cap       = {}
+# ── t-SNE ─────────────────────────────────────────────────────────────────────
 
-    def hook(m, i, o):
-        hs = o[0] if isinstance(o, tuple) else o
-        cap["cls"] = hs.detach().float()[:, 0, :]
+def run_tsne(latents_np, perplexity=30, seed=42):
+    """SVD(50) → t-SNE(2)."""
+    n, d = latents_np.shape
+    n_svd = min(50, n - 1, d)
+    if d > n_svd:
+        reduced = TruncatedSVD(n_components=n_svd, random_state=seed).fit_transform(latents_np)
+    else:
+        reduced = latents_np
 
-    h    = backbone.model.vision_model.encoder.layers[layer_idx].register_forward_hook(hook)
-    lats = []
-    for pv, _ in loader:
-        backbone.model.vision_model(pixel_values=pv.to(device))
-        _, lat, _ = sae(cap["cls"])
-        lats.append(lat.cpu())
-    h.remove()
-    return torch.cat(lats)
+    perp = min(perplexity, max(5, n // 4))
+    tsne_kwargs = dict(
+        n_components=2, perplexity=perp, random_state=seed,
+        learning_rate="auto", init="pca",
+    )
+    sig = inspect.signature(TSNE.__init__).parameters
+    if "max_iter" in sig:
+        tsne_kwargs["max_iter"] = 1000
+    else:
+        tsne_kwargs["n_iter"] = 1000
 
-
-# ── tSNE ──────────────────────────────────────────────────────────────────────
-
-def run_tsne(latents: np.ndarray, perplexity=30, seed=42) -> np.ndarray:
-    """TruncatedSVD(50) → tSNE(2). Returns [N, 2]."""
-    from sklearn.decomposition import TruncatedSVD
-    from sklearn.manifold import TSNE
-
-    n, d        = latents.shape
-    n_comp      = min(50, n - 1, d)
-    reduced     = TruncatedSVD(n_components=n_comp, random_state=seed).fit_transform(latents) \
-                  if d > n_comp else latents
-    perp        = min(perplexity, max(5, n // 4))
-    return TSNE(n_components=2, perplexity=perp, random_state=seed,
-                max_iter=1000, learning_rate="auto", init="pca").fit_transform(
-                    reduced.astype(np.float32))
+    return TSNE(**tsne_kwargs).fit_transform(reduced.astype(np.float32))
 
 
-# ── Viz 1: tSNE ───────────────────────────────────────────────────────────────
+# ── Plotting ──────────────────────────────────────────────────────────────────
 
-def plot_tsne(embedding, condition_labels, neuron_labels,
-              neuron_ids, ds_name, accs, classnames_per_neuron, out_path):
+def plot_tsne_comparison(
+    emb_base, labels_base,
+    emb_cross, labels_cross,
+    emb_adapted, labels_adapted,
+    classnames, ds_name,
+    silhouette_base, silhouette_cross, silhouette_adapted,
+    sparsity_base, sparsity_cross, sparsity_adapted,
+    out_path,
+):
     """
-    Left panel : tSNE scatter (condition = color, neuron = marker shape).
-    Each neuron cluster centroid is annotated with its neuron ID + top class.
-    Right panel: accuracy bar chart showing ZS / Cross-SAE / AdSAE.
+    3-panel t-SNE:
+      left:  Base backbone + Base SAE
+      mid:   LoRA backbone + Base SAE
+      right: LoRA backbone + Adapted SAE
     """
-    n_neurons   = len(neuron_ids)
-    n_imgs      = embedding.shape[0] // 3
-    nc_colors   = [NEURON_CMAP(i / max(n_neurons - 1, 1)) for i in range(n_neurons)]
+    num_classes = len(classnames)
+    colors = get_colors(num_classes)
 
-    fig = plt.figure(figsize=(17, 6.5))
-    gs  = gridspec.GridSpec(1, 2, figure=fig, width_ratios=[3.2, 1],
-                            wspace=0.28, left=0.05, right=0.97,
-                            top=0.88, bottom=0.10)
+    fig, axes = plt.subplots(1, 3, figsize=(48, 14))
 
-    # ── tSNE panel ────────────────────────────────────────────────────────────
-    ax = fig.add_subplot(gs[0])
+    panels = [
+        ("Base backbone + Base SAE", emb_base, labels_base.numpy(),
+         silhouette_base, sparsity_base),
+        ("LoRA backbone + Base SAE", emb_cross, labels_cross.numpy(),
+         silhouette_cross, sparsity_cross),
+        (f"LoRA backbone + Adapted SAE ({ds_name})", emb_adapted, labels_adapted.numpy(),
+         silhouette_adapted, sparsity_adapted),
+    ]
 
-    # Draw convex hull ellipses per (condition, neuron) cluster
-    for ci in range(3):
-        for ni in range(n_neurons):
-            mask = (condition_labels == ci) & (neuron_labels == ni)
-            pts  = embedding[mask]
-            if len(pts) < 3:
-                continue
-            cx, cy = pts[:, 0].mean(), pts[:, 1].mean()
-            rx = pts[:, 0].std() + 1e-3
-            ry = pts[:, 1].std() + 1e-3
-            ell = mpatches.Ellipse(
-                (cx, cy), 2.8 * rx, 2.8 * ry,
-                linewidth=1.2, edgecolor=CONDITION_COLORS[ci],
-                facecolor=CONDITION_COLORS[ci], alpha=0.07, zorder=1,
-            )
-            ax.add_patch(ell)
-
-    # Scatter points
-    for ci, (cname, ccolor, cmark) in enumerate(
-            zip(CONDITION_SHORT, CONDITION_COLORS, CONDITION_MARKERS)):
-        mask = condition_labels == ci
+    for ax, (title, emb, labs, sil, sparsity) in zip(axes, panels):
+        # Scatter
+        point_colors = [colors[int(l) % len(colors)] for l in labs]
         ax.scatter(
-            embedding[mask, 0], embedding[mask, 1],
-            c=[nc_colors[neuron_labels[j]] for j in np.where(mask)[0]],
-            marker=cmark, s=70, alpha=0.92, linewidths=0.6,
-            edgecolors=ccolor, zorder=3,
+            emb[:, 0], emb[:, 1],
+            c=point_colors, s=46, alpha=0.75,
+            linewidths=0.0, zorder=2,
         )
 
-    ax.set_title(f"tSNE of SAE Latents — {ds_name}\n"
-                 "Each point = one image; marker shape/edge = condition; fill color = neuron ID.",
-                 fontsize=9, pad=6)
-    ax.set_xlabel("tSNE dim 1", fontsize=9)
-    ax.set_ylabel("tSNE dim 2", fontsize=9)
+        # Large class labels at class centroids (no legend).
+        for cls_idx, cls_name in enumerate(classnames):
+            mask = (labs == cls_idx)
+            if not np.any(mask):
+                continue
+            cx = float(np.median(emb[mask, 0]))
+            cy = float(np.median(emb[mask, 1]))
+            txt = ax.text(
+                cx, cy, cls_name,
+                color=colors[cls_idx % len(colors)],
+                fontsize=34, fontweight="bold",
+                ha="center", va="center", zorder=5,
+            )
+            txt.set_path_effects([
+                pe.Stroke(linewidth=5, foreground="white"),
+                pe.Normal(),
+            ])
+
+        ax.set_title("")
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.grid(True, linestyle="--", alpha=0.1, zorder=0)
+        ax.spines[["top", "right"]].set_visible(False)
+
+    fig.tight_layout(rect=[0, 0, 1, 0.92])
+
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    # High-res PNG for quick viewing, plus vector PDF for Overleaf.
+    fig.savefig(out_path, dpi=450, bbox_inches="tight", facecolor="white")
+    out_path_pdf = os.path.splitext(out_path)[0] + ".pdf"
+    fig.savefig(out_path_pdf, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"  Saved → {out_path}")
+    print(f"  Saved → {out_path_pdf}")
+
+
+def plot_similarity_heatmaps(
+    latents_base, labels_base,
+    latents_cross, labels_cross,
+    latents_adapted, labels_adapted,
+    classnames, ds_name, out_path,
+):
+    """
+    Class-centroid cosine similarity matrices for 3 conditions.
+    """
+    num_classes = len(classnames)
+
+    def compute_centroid_sim(latents, labels):
+        centroids = []
+        for c in range(num_classes):
+            mask = labels == c
+            if mask.sum() == 0:
+                centroids.append(torch.zeros(latents.shape[1]))
+            else:
+                cent = latents[mask].mean(dim=0)
+                centroids.append(cent)
+        C = torch.stack(centroids)  # (num_classes, d_sae)
+        C_norm = C / (C.norm(dim=1, keepdim=True) + 1e-8)
+        return (C_norm @ C_norm.t()).numpy()
+
+    sim_base = compute_centroid_sim(latents_base, labels_base)
+    sim_cross = compute_centroid_sim(latents_cross, labels_cross)
+    sim_adapted = compute_centroid_sim(latents_adapted, labels_adapted)
+
+    all_sims = np.stack([sim_base, sim_cross, sim_adapted], axis=0)
+    data_min = float(np.min(all_sims))
+    # Keep zero visually meaningful while still showing negative similarities if present.
+    vmin = min(-0.1, data_min)
+    norm = matplotlib.colors.TwoSlopeNorm(vmin=vmin, vcenter=0.0, vmax=1.0)
+
+    fig = plt.figure(figsize=(30, 10), constrained_layout=True)
+    grid = fig.add_gridspec(1, 3, width_ratios=[1, 1, 1], wspace=0.08)
+    axes = [fig.add_subplot(grid[0, i]) for i in range(3)]
+
+    for ax, sim, title in [
+        (axes[0], sim_base, "Base backbone + Base SAE"),
+        (axes[1], sim_cross, "LoRA backbone + Base SAE"),
+        (axes[2], sim_adapted, f"LoRA backbone + Adapted SAE ({ds_name})"),
+    ]:
+        im = ax.imshow(sim, cmap="RdBu_r", norm=norm, interpolation="nearest", aspect="equal")
+        ax.set_xticks(range(num_classes))
+        ax.set_yticks(range(num_classes))
+        short_names = [n if len(n) <= 14 else (n[:13] + "…") for n in classnames]
+        ax.set_xticklabels(short_names, rotation=45, ha="right", fontsize=18)
+        ax.set_yticklabels(short_names, fontsize=18)
+        ax.set_title(title, fontsize=24, fontweight="bold")
+
+        # Annotate diagonal mean and off-diagonal mean
+        diag = np.diag(sim).mean()
+        mask_off = ~np.eye(num_classes, dtype=bool)
+        off_diag = sim[mask_off].mean()
+        ax.text(
+            0.02, 0.98,
+            f"Diag mean: {diag:.3f}\nOff-diag mean: {off_diag:.3f}\n"
+            f"Ratio: {diag / (off_diag + 1e-8):.1f}×",
+            transform=ax.transAxes, fontsize=15,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round,pad=0.35", fc="white", ec="#999", alpha=0.86),
+        )
+        ax.tick_params(length=0)
+
+    fig.savefig(out_path, dpi=450, bbox_inches="tight", facecolor="white")
+    out_path_pdf = os.path.splitext(out_path)[0] + ".pdf"
+    fig.savefig(out_path_pdf, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+    print(f"  Saved → {out_path}")
+    print(f"  Saved → {out_path_pdf}")
+
+
+def plot_sparsity_comparison(
+    latents_base, labels_base,
+    latents_cross, labels_cross,
+    latents_adapted, labels_adapted,
+    classnames, ds_name, out_path,
+):
+    """
+    Per-class L0 sparsity (how many neurons fire) for all 3 conditions.
+    """
+    num_classes = len(classnames)
+
+    def per_class_l0(latents, labels):
+        l0s = []
+        for c in range(num_classes):
+            mask = labels == c
+            if mask.sum() == 0:
+                l0s.append(0)
+            else:
+                active = (latents[mask] > 0).float().sum(dim=1)  # per image
+                l0s.append(float(active.mean()))
+        return l0s
+
+    l0_base = per_class_l0(latents_base, labels_base)
+    l0_cross = per_class_l0(latents_cross, labels_cross)
+    l0_adapted = per_class_l0(latents_adapted, labels_adapted)
+
+    fig, ax = plt.subplots(figsize=(max(8, num_classes * 0.6), 5))
+    x = np.arange(num_classes)
+    w = 0.26
+
+    ax.bar(x - w, l0_base, w, color="#7faed4", edgecolor="white",
+           label="Base backbone + Base SAE", zorder=3)
+    ax.bar(x, l0_cross, w, color="#f2b880", edgecolor="white",
+           label="LoRA backbone + Base SAE", zorder=3)
+    ax.bar(x + w, l0_adapted, w, color="#d47f7f", edgecolor="white",
+           label="LoRA backbone + Adapted SAE", zorder=3)
+
+    short_names = [n[:12] for n in classnames]
+    ax.set_xticks(x)
+    ax.set_xticklabels(short_names, rotation=45, ha="right", fontsize=8)
+    ax.set_ylabel("Mean active neurons (L₀)", fontsize=10)
+    ax.set_title(
+        f"Per-Class Sparsity — {ds_name}\n"
+        "Fewer active neurons = more selective representation.",
+        fontsize=11, fontweight="bold",
+    )
+    ax.legend(fontsize=9)
     ax.spines[["top", "right"]].set_visible(False)
-    ax.tick_params(labelsize=8)
+    ax.yaxis.grid(True, linestyle="--", alpha=0.2)
+    ax.set_axisbelow(True)
 
-    # ── Accuracy bar panel ────────────────────────────────────────────────────
-    ax2 = fig.add_subplot(gs[1])
-    labels = ["ZS\n(BSAE)", "Cross-\nSAE\n(BAE)", "Adapted\n(AdSAE)"]
-    vals   = [accs.get("zs_acc"), accs.get("cross_acc"), accs.get("adsae_acc")]
-    valid  = [v for v in vals if v is not None]
-
-    bars = ax2.bar(
-        range(len(labels)),
-        [v if v is not None else 0 for v in vals],
-        color=CONDITION_COLORS, edgecolor="white", width=0.6, zorder=3,
-    )
-    for bar, v in zip(bars, vals):
-        if v is not None:
-            ax2.text(bar.get_x() + bar.get_width() / 2,
-                     bar.get_height() + max(valid) * 0.02,
-                     f"{v:.1f}%", ha="center", va="bottom",
-                     fontsize=9, fontweight="bold")
-
-    # Annotate AdSAE gain over Cross-SAE
-    if accs.get("cross_acc") and accs.get("adsae_acc"):
-        gain = accs["adsae_acc"] - accs["cross_acc"]
-        sign = "+" if gain >= 0 else ""
-        ax2.annotate(
-            f"AdSAE {sign}{gain:.1f}pp\nvs Cross-SAE",
-            xy=(2, accs["adsae_acc"]), xytext=(1.5, max(valid) * 0.92),
-            arrowprops=dict(arrowstyle="->", color="#333", lw=1.2),
-            fontsize=7.5, color="#225522", fontweight="bold",
-            ha="center",
-        )
-
-    ax2.set_xticks(range(len(labels)))
-    ax2.set_xticklabels(labels, fontsize=8)
-    ax2.set_ylim(0, max(valid) * 1.22 if valid else 100)
-    ax2.set_ylabel("Zero-shot Accuracy (%)", fontsize=9)
-    ax2.set_title(f"Accuracy Ablation\n({ds_name})", fontsize=9, fontweight="bold")
-    ax2.spines[["top", "right"]].set_visible(False)
-    ax2.yaxis.grid(True, linestyle="--", alpha=0.4, zorder=0)
-    ax2.set_axisbelow(True)
-
-    fig.suptitle(
-        f"Neuron Representation Analysis  |  CLIP + LoRA + SAE  |  {ds_name}  "
-        f"({n_imgs} images × 3 conditions, top-{n_neurons} AdSAE neurons)",
-        fontsize=10, fontweight="bold", y=0.97,
+    # Overall stats
+    mean_base = np.mean(l0_base)
+    mean_cross = np.mean(l0_cross)
+    mean_adapted = np.mean(l0_adapted)
+    ax.text(
+        0.98, 0.95,
+        f"Mean L₀: Base={mean_base:.0f}, Cross={mean_cross:.0f}, Adapted={mean_adapted:.0f}",
+        transform=ax.transAxes, fontsize=9, ha="right", va="top",
+        bbox=dict(boxstyle="round", fc="white", ec="#aaa", alpha=0.9),
     )
 
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=160, bbox_inches="tight", facecolor="white")
     plt.close(fig)
-    print(f"  Saved Viz 1 → {out_path}")
-
-
-# ── Viz 2: Image grid ─────────────────────────────────────────────────────────
-
-def _pil(dataset, idx):
-    item = dataset[int(idx)]
-    img  = item["image"] if isinstance(item, dict) else item[0]
-    if not isinstance(img, Image.Image):
-        img = Image.fromarray(img)
-    return img.convert("RGB").resize((110, 110))
-
-
-def plot_image_grid(dataset, top_per_neuron, latents_per_cond,
-                    all_img_indices, neuron_ids, classnames,
-                    label_key, ds_name, out_path, n_imgs=6):
-    """
-    Layout: n_neurons rows × (3 groups of n_imgs columns).
-    Each row = one neuron.  Each group = one condition.
-    Border color = condition.  Caption = class + activation value.
-    Header row shows condition name + accuracy stats.
-    """
-    n_neurons = len(neuron_ids)
-    n_conds   = 3
-    grp       = min(n_imgs, 6)
-
-    # column layout: [grp images | sep | grp images | sep | grp images]
-    col_w_img  = 1.15
-    col_w_sep  = 0.18
-    col_w_lbl  = 1.3
-    total_cols = n_conds * grp + (n_conds - 1)   # image cols + separators
-    total_rows = n_neurons + 1                    # +1 for header row
-
-    fig_w = col_w_lbl + total_cols * col_w_img + (n_conds - 1) * col_w_sep
-    fig_h = total_rows * 1.45
-
-    fig = plt.figure(figsize=(fig_w, fig_h))
-
-    # Build width_ratios: [label_col, cond0_imgs..., sep, cond1_imgs..., sep, cond2_imgs...]
-    width_ratios = [col_w_lbl]
-    for ci in range(n_conds):
-        width_ratios += [col_w_img] * grp
-        if ci < n_conds - 1:
-            width_ratios.append(col_w_sep)
-
-    gs = gridspec.GridSpec(
-        total_rows, len(width_ratios),
-        figure=fig, hspace=0.55, wspace=0.04,
-        left=0.01, right=0.99, top=0.94, bottom=0.02,
-        width_ratios=width_ratios,
-    )
-
-    # Column offsets per condition (accounting for label col + sep cols)
-    # label=0, cond0=[1..grp], sep, cond1=[grp+2..2*grp+1], sep, cond2=[2*grp+3..3*grp+2]
-    cond_starts = [1, grp + 2, 2 * grp + 3]
-
-    local_map = {gidx: li for li, gidx in enumerate(all_img_indices)}
-
-    # ── Header row ────────────────────────────────────────────────────────────
-    for ci, (cshort, ccolor) in enumerate(zip(CONDITION_SHORT, CONDITION_COLORS)):
-        x0   = cond_starts[ci]
-        # Span the full group width
-        ax_h = fig.add_subplot(gs[0, x0:x0 + grp])
-        ax_h.set_facecolor(ccolor)
-        ax_h.axis("off")
-        acc_txt = ""
-        key = ["zs_acc", "cross_acc", "adsae_acc"][ci]
-        # (accs not directly available here; just show condition name)
-        ax_h.text(0.5, 0.5, f"{cshort}", transform=ax_h.transAxes,
-                  ha="center", va="center", fontsize=9, fontweight="bold",
-                  color="white")
-
-    ax_lbl0 = fig.add_subplot(gs[0, 0])
-    ax_lbl0.axis("off")
-    ax_lbl0.text(0.5, 0.5, "Neuron\n(top class)", transform=ax_lbl0.transAxes,
-                 ha="center", va="center", fontsize=7.5, fontweight="bold")
-
-    # ── Image rows ────────────────────────────────────────────────────────────
-    for row, (ni_idx, nid) in enumerate(zip(range(n_neurons), neuron_ids), start=1):
-
-        # Neuron label column
-        ax_lbl = fig.add_subplot(gs[row, 0])
-        ax_lbl.axis("off")
-        top_cls = classnames[
-            int(np.argmax(
-                np.array([
-                    dataset[int(gidx)][label_key]
-                    for gidx in top_per_neuron[ni_idx][2][:4]   # AdSAE top images
-                    if gidx < len(dataset)
-                ] or [0])
-            ))
-        ] if len(classnames) > 0 else f"N{nid}"
-
-        ax_lbl.text(0.5, 0.7, f"N{ni_idx+1}  (#{nid})",
-                    transform=ax_lbl.transAxes,
-                    ha="center", va="center", fontsize=7, fontweight="bold")
-        ax_lbl.add_patch(mpatches.FancyBboxPatch(
-            (0.05, 0.02), 0.90, 0.60,
-            boxstyle="round,pad=0.02",
-            facecolor=NEURON_CMAP(ni_idx / max(n_neurons - 1, 1)),
-            alpha=0.25, transform=ax_lbl.transAxes,
-        ))
-
-        for ci, ccolor in enumerate(CONDITION_COLORS):
-            x0         = cond_starts[ci]
-            img_list   = top_per_neuron[ni_idx][ci]
-            lat        = latents_per_cond[ci]   # [N_imgs, d_sae]
-
-            for col_off in range(grp):
-                ax = fig.add_subplot(gs[row, x0 + col_off])
-                ax.axis("off")
-                if col_off >= len(img_list):
-                    ax.set_facecolor("#f5f5f5")
-                    continue
-                gidx = img_list[col_off]
-                try:
-                    pil  = _pil(dataset, gidx)
-                    item = dataset[int(gidx)]
-                    lbl  = item.get(label_key, -1) if isinstance(item, dict) else -1
-                    cls_name = (classnames[lbl][:12] if 0 <= lbl < len(classnames) else "")
-
-                    li   = local_map.get(gidx)
-                    actv = float(lat[li, nid]) if li is not None else 0.0
-
-                    ax.imshow(pil, aspect="auto")
-                    for sp in ax.spines.values():
-                        sp.set_visible(True)
-                        sp.set_edgecolor(ccolor)
-                        sp.set_linewidth(2.2)
-                    ax.set_xticks([]); ax.set_yticks([])
-                    ax.set_xlabel(f"{cls_name}\nact={actv:.1f}",
-                                  fontsize=5.5, labelpad=1.5, color="#222")
-                    if row == 1:
-                        ax.set_title(f"#{col_off+1}", fontsize=5.5, pad=1.5,
-                                     color=ccolor, fontweight="bold")
-                except Exception:
-                    ax.text(0.5, 0.5, "err", ha="center", va="center",
-                            fontsize=7, color="gray")
-
-    fig.suptitle(
-        f"Top-{grp} Activating Images per Neuron  |  {ds_name}\n"
-        "Rows = top neurons (selected by AdSAE).  "
-        "Columns grouped by condition.  "
-        "Border color = condition.  "
-        "AdSAE neurons capture domain-specific concepts missed by Cross-SAE.",
-        fontsize=8.5, fontweight="bold", y=0.98,
-    )
-
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    fig.savefig(out_path, dpi=130, bbox_inches="tight")
-    plt.close(fig)
-    print(f"  Saved Viz 2 → {out_path}")
+    print(f"  Saved → {out_path}")
 
 
 # ── Per-dataset pipeline ──────────────────────────────────────────────────────
@@ -487,163 +462,174 @@ def process_dataset(ds_name, args, registry, device):
         print(f"[WARN] No config for {ds_name}, skipping.")
         return
 
-    cfg       = ADSAE_CONFIGS[ds_name]
+    cfg = ADSAE_CONFIGS[ds_name]
     out_dir_ds = os.path.join(args.out_dir, ds_name)
     os.makedirs(out_dir_ds, exist_ok=True)
 
-    print(f"\n{'═'*65}\n  Dataset: {ds_name.upper()}\n{'═'*65}")
+    print(f"\n{'═'*65}")
+    print(f"  Dataset: {ds_name.upper()}")
+    print(f"{'═'*65}")
 
     # ── Dataset ───────────────────────────────────────────────────────────────
-    dataset    = get_dataset(ds_name, registry=registry, max_samples=args.max_dataset_images)
-    classnames = get_classnames(ds_name, dataset=dataset, registry=registry)
-    label_key  = get_label_key(ds_name, dataset, registry=registry)
-    print(f"  {len(dataset):,} images, {len(classnames)} classes")
+    dataset_full = get_dataset(ds_name, registry=registry, max_samples=None)
+    classnames = get_classnames(ds_name, dataset=dataset_full, registry=registry)
+    label_key  = get_label_key(ds_name, dataset_full, registry=registry)
+    dataset = stratified_subset(dataset_full, label_key, args.max_images, seed=42)
+    num_classes = len(classnames)
+    print(f"  {len(dataset):,} images (from {len(dataset_full):,}), {num_classes} classes")
 
-    # ── SAEs ──────────────────────────────────────────────────────────────────
-    print("  Loading SAEs...")
-    if not os.path.isfile(cfg["sae_path"]):
-        print(f"  [SKIP] AdSAE not found: {cfg['sae_path']}"); return
+    # ── Load SAEs + backbones ─────────────────────────────────────────────────
+    for path, name in [(cfg["sae_path"], "AdSAE"), (BASE_SAE_PATH, "BaseSAE"),
+                       (cfg["lora_path"], "LoRA")]:
+        if not os.path.isfile(path):
+            print(f"  [SKIP] {name} not found: {path}"); return
+
     base_sae, _ = load_sae(BASE_SAE_PATH, device); base_sae.eval()
-    ad_sae,   _ = load_sae(cfg["sae_path"],   device); ad_sae.eval()
+    ad_sae,   _ = load_sae(cfg["sae_path"], device); ad_sae.eval()
+    bb_base = load_base_backbone(device)
+    bb_lora = load_lora_backbone(cfg["lora_path"], device)
 
-    # ── Backbones ─────────────────────────────────────────────────────────────
-    print("  Loading ZS backbone..."); bb_zs   = load_base_backbone(device)
-    if not os.path.isfile(cfg["lora_path"]):
-        print(f"  [SKIP] LoRA weights not found: {cfg['lora_path']}"); return
-    print("  Loading LoRA backbone..."); bb_lora = load_lora_backbone(cfg["lora_path"], device)
-
-    conditions = [
-        (bb_zs,   base_sae, BASE_SAE_LAYER, "ZS + BSAE"),
-        (bb_lora, base_sae, BASE_SAE_LAYER, "Adapted + BAE"),
-        (bb_lora, ad_sae,   cfg["layer"],   "Adapted + AdSAE"),
-    ]
-
-    # ── 1. AdSAE pass over full dataset ───────────────────────────────────────
-    print(f"\n[1] AdSAE pass ({len(dataset)} images)...")
-    bb_ad, sae_ad, layer_ad, _ = conditions[2]
-    latents_ad, labels_ad, idx_ad = extract_sae_latents(
-        bb_ad, sae_ad, dataset, label_key, layer_ad,
+    # ── Extract latents ───────────────────────────────────────────────────────
+    # Condition 1: Base backbone + Base SAE
+    print("\n  Extracting: Base backbone + Base SAE")
+    lat_base, lab_base = extract_latents(
+        bb_base, base_sae, dataset, label_key, BASE_SAE_LAYER,
         batch_size=args.batch_size, device=device, num_workers=args.num_workers,
     )
 
-    # ── 2. Top-N neurons ──────────────────────────────────────────────────────
-    print(f"\n[2] Selecting top-{args.top_n_neurons} neurons...")
-    firing_rate = (latents_ad > 0).float().mean(dim=0)
-    mean_act    = latents_ad.mean(dim=0)
-    alive       = (firing_rate > 5e-4) & (firing_rate < 0.5)
-    scores      = mean_act.clone(); scores[~alive] = -1.0
-    top_nids    = torch.argsort(scores, descending=True)[:args.top_n_neurons].tolist()
-    print(f"    neuron IDs: {top_nids}")
-
-    # ── 3. Top-M images per neuron (AdSAE) ────────────────────────────────────
-    print(f"\n[3] Top-{args.top_m_images} images per neuron...")
-    top_adsae: List[List[int]] = []
-    for nid in top_nids:
-        vals = latents_ad[:, nid]
-        k    = min(args.top_m_images, int((vals > 0).sum().item()))
-        if k == 0:
-            top_adsae.append([]); continue
-        top_adsae.append(idx_ad[torch.argsort(vals, descending=True)[:k]].tolist())
-
-    all_img_idx = sorted(set(i for imgs in top_adsae for i in imgs))
-    print(f"    unique images: {len(all_img_idx)}")
-    if not all_img_idx:
-        print("  [SKIP] no images selected"); return
-
-    # ── 4. Latents for selected images under all 3 conditions ─────────────────
-    print("\n[4] Extracting latents for selected images (3 conditions)...")
-    lats_per_cond: List[torch.Tensor] = []
-    for bb, sae, layer, cname in conditions:
-        print(f"    {cname}...")
-        lats_per_cond.append(extract_for_indices(
-            bb, sae, dataset, label_key, layer,
-            indices=all_img_idx, batch_size=args.batch_size, device=device,
-        ))
-
-    # ── 5. tSNE ───────────────────────────────────────────────────────────────
-    print("\n[5] Running tSNE...")
-    n_imgs    = len(all_img_idx)
-    lat_np    = np.stack([l.numpy() for l in lats_per_cond], axis=1)  # [N,3,d]
-    lat_flat  = lat_np.reshape(n_imgs * 3, -1)    # interleave: [img0c0,img0c1,img0c2,img1c0,...]
-    cond_lbl  = np.tile(np.arange(3), n_imgs)
-
-    img2neuron  = {gidx: ni for ni, imgs in enumerate(top_adsae) for gidx in imgs}
-    neuron_lbl  = np.tile(
-        np.array([img2neuron.get(gidx, 0) for gidx in all_img_idx]), 3
-    )
-    embedding   = run_tsne(lat_flat, perplexity=args.tsne_perplexity)
-
-    # Per-neuron top class (from AdSAE top images)
-    classnames_per_neuron = []
-    for ni, imgs in enumerate(top_adsae):
-        lbls = [dataset[int(g)].get(label_key, 0) for g in imgs[:4] if g < len(dataset)]
-        if lbls:
-            top_cls = classnames[int(np.bincount(lbls).argmax())] if classnames else f"N{top_nids[ni]}"
-        else:
-            top_cls = f"N{top_nids[ni]}"
-        classnames_per_neuron.append(top_cls)
-
-    # ── 6. Viz 1: tSNE ────────────────────────────────────────────────────────
-    print("\n[6] Plotting Viz 1 (tSNE)...")
-    plot_tsne(
-        embedding, cond_lbl, neuron_lbl,
-        neuron_ids=top_nids, ds_name=ds_name, accs=cfg,
-        classnames_per_neuron=classnames_per_neuron,
-        out_path=os.path.join(out_dir_ds, "tsne_neurons.png"),
+    # Condition 2: LoRA backbone + Base SAE (cross condition)
+    print("  Extracting: LoRA backbone + Base SAE")
+    lat_cross, lab_cross = extract_latents(
+        bb_lora, base_sae, dataset, label_key, BASE_SAE_LAYER,
+        batch_size=args.batch_size, device=device, num_workers=args.num_workers,
     )
 
-    # ── 7. Viz 2: image grid ──────────────────────────────────────────────────
-    print("\n[7] Plotting Viz 2 (image grid)...")
-    # For each condition, re-rank the same image pool by activation on each neuron
-    top_per_neuron_all = []
-    local_map = {gidx: li for li, gidx in enumerate(all_img_idx)}
-    for ni_idx, nid in enumerate(top_nids):
-        row = []
-        for ci, lat in enumerate(lats_per_cond):
-            vals     = lat[:, nid]
-            k        = min(args.top_m_images, int((vals > 0).sum().item()))
-            top_loc  = torch.argsort(vals, descending=True)[:max(k, 1)].tolist()
-            row.append([all_img_idx[li] for li in top_loc])
-        top_per_neuron_all.append(row)
-
-    plot_image_grid(
-        dataset, top_per_neuron_all, lats_per_cond,
-        all_img_idx, top_nids, classnames, label_key,
-        ds_name, os.path.join(out_dir_ds, "top_images_grid.png"),
-        n_imgs=min(args.top_m_images, 6),
+    # Condition 3: LoRA backbone + Adapted SAE
+    print("  Extracting: LoRA backbone + Adapted SAE")
+    lat_adapted, lab_adapted = extract_latents(
+        bb_lora, ad_sae, dataset, label_key, cfg["layer"],
+        batch_size=args.batch_size, device=device, num_workers=args.num_workers,
     )
 
-    del bb_zs, bb_lora, base_sae, ad_sae
+    print(
+        f"  Latent shapes: base={lat_base.shape}, cross={lat_cross.shape}, adapted={lat_adapted.shape}"
+    )
+
+    # ── Compute metrics ───────────────────────────────────────────────────────
+    # L0 sparsity
+    l0_base = float((lat_base > 0).float().sum(dim=1).mean())
+    l0_cross = float((lat_cross > 0).float().sum(dim=1).mean())
+    l0_adapted = float((lat_adapted > 0).float().sum(dim=1).mean())
+    print(
+        f"  Mean L₀ sparsity: base={l0_base:.0f}, cross={l0_cross:.0f}, adapted={l0_adapted:.0f}"
+    )
+
+    # Silhouette score (on SVD-reduced latents for speed)
+    print("  Computing silhouette scores...")
+    n_svd = min(50, lat_base.shape[0] - 1, lat_base.shape[1])
+
+    svd_base = TruncatedSVD(n_components=n_svd, random_state=42).fit_transform(
+        lat_base.numpy())
+    sil_base = silhouette_score(svd_base, lab_base.numpy(),
+                                sample_size=min(2000, len(lab_base)))
+
+    n_svd_cross = min(50, lat_cross.shape[0] - 1, lat_cross.shape[1])
+    svd_cross = TruncatedSVD(n_components=n_svd_cross, random_state=42).fit_transform(
+        lat_cross.numpy())
+    sil_cross = silhouette_score(svd_cross, lab_cross.numpy(),
+                                 sample_size=min(2000, len(lab_cross)))
+
+    n_svd_ad = min(50, lat_adapted.shape[0] - 1, lat_adapted.shape[1])
+    svd_adapted = TruncatedSVD(n_components=n_svd_ad, random_state=42).fit_transform(
+        lat_adapted.numpy())
+    sil_adapted = silhouette_score(svd_adapted, lab_adapted.numpy(),
+                                   sample_size=min(2000, len(lab_adapted)))
+    print(
+        f"  Silhouette: base={sil_base:.3f}, cross={sil_cross:.3f}, adapted={sil_adapted:.3f}"
+    )
+
+    # ── t-SNE ─────────────────────────────────────────────────────────────────
+    print("  Running t-SNE (base)...")
+    emb_base = run_tsne(lat_base.numpy(), perplexity=args.perplexity, seed=42)
+    print("  Running t-SNE (cross)...")
+    emb_cross = run_tsne(lat_cross.numpy(), perplexity=args.perplexity, seed=42)
+    print("  Running t-SNE (adapted)...")
+    emb_adapted = run_tsne(lat_adapted.numpy(), perplexity=args.perplexity, seed=42)
+
+    # ── Plot 1: t-SNE comparison ──────────────────────────────────────────────
+    print("  Plotting t-SNE comparison...")
+    plot_tsne_comparison(
+        emb_base, lab_base,
+        emb_cross, lab_cross,
+        emb_adapted, lab_adapted,
+        classnames, ds_name,
+        sil_base, sil_cross, sil_adapted,
+        l0_base, l0_cross, l0_adapted,
+        out_path=os.path.join(out_dir_ds, "tsne_comparison.png"),
+    )
+
+    # ── Plot 2: Similarity heatmaps ───────────────────────────────────────────
+    if num_classes <= 30:
+        print("  Plotting similarity heatmaps...")
+        plot_similarity_heatmaps(
+            lat_base, lab_base,
+            lat_cross, lab_cross,
+            lat_adapted, lab_adapted,
+            classnames, ds_name,
+            out_path=os.path.join(out_dir_ds, "class_similarity.png"),
+        )
+
+    # ── Plot 3: Sparsity comparison ───────────────────────────────────────────
+    print("  Plotting sparsity comparison...")
+    plot_sparsity_comparison(
+        lat_base, lab_base,
+        lat_cross, lab_cross,
+        lat_adapted, lab_adapted,
+        classnames, ds_name,
+        out_path=os.path.join(out_dir_ds, "sparsity_comparison.png"),
+    )
+
+    # ── Cleanup ───────────────────────────────────────────────────────────────
+    del bb_base, bb_lora, base_sae, ad_sae
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+
+    print(f"\n  Summary for {ds_name}:")
+    print(
+        f"    Silhouette:  base={sil_base:.3f}  cross={sil_cross:.3f}  adapted={sil_adapted:.3f}"
+    )
+    print(
+        f"      Δcross-base={sil_cross - sil_base:+.3f}  Δadapted-base={sil_adapted - sil_base:+.3f}"
+    )
+    print(f"    Mean L₀:     base={l0_base:.0f}  cross={l0_cross:.0f}  adapted={l0_adapted:.0f}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="Neuron tSNE + image grid visualization")
-    parser.add_argument("--datasets",            nargs="+",
+    parser = argparse.ArgumentParser(
+        description="t-SNE of SAE latent activations — base, cross, adapted"
+    )
+    parser.add_argument("--datasets", nargs="+",
                         default=list(ADSAE_CONFIGS.keys()),
                         choices=list(ADSAE_CONFIGS.keys()))
-    parser.add_argument("--top_n_neurons",       type=int, default=8)
-    parser.add_argument("--top_m_images",        type=int, default=6)
-    parser.add_argument("--max_dataset_images",  type=int, default=2000)
-    parser.add_argument("--batch_size",          type=int, default=64)
-    parser.add_argument("--num_workers",         type=int, default=4)
-    parser.add_argument("--tsne_perplexity",     type=int, default=30)
-    parser.add_argument("--device",              default="cuda")
-    parser.add_argument("--out_dir",             default="out/neuron_viz")
+    parser.add_argument("--max_images", type=int, default=2000)
+    parser.add_argument("--perplexity", type=int, default=30)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--num_workers", type=int, default=4)
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--out_dir", default="out/latent_tsne")
     args = parser.parse_args()
 
     device = args.device
     if device == "cuda" and not torch.cuda.is_available():
-        print("[WARN] CUDA not available, using CPU."); device = "cpu"
+        device = "cpu"
 
     registry = load_registry()
     for ds in args.datasets:
         process_dataset(ds, args, registry, device)
 
-    print("\n[INFO] Done. Outputs in:", args.out_dir)
+    print(f"\n Done. Outputs in: {args.out_dir}")
 
 
 if __name__ == "__main__":

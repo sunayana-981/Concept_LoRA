@@ -1,398 +1,1010 @@
 #!/usr/bin/env python3
 """
-Full hyperparameter sweep for DAMS across ALL available SAE/dataset combinations.
+Full DAMS hyperparameter sweep across all discoverable SAE checkpoints + datasets.
 
-    DAMS = EC × (α × CSS_norm + β × FSS)
-    CSS_norm = css_raw / (css_raw + κ)
-    FSS = mean_c max_f [ p(c|f) × (1 − h_norm(f))^s ]
+Goal
+----
+Maximise separation between Base SAE and Adapted SAE by sweeping DAMS v3 mixing
+hyperparameters:
+    DAMS = EC^rho × (alpha × CSS_norm + beta × FSS + gamma × DAS)
+    CSS_norm = css_raw / (css_raw + kappa)
+    FSS      = class-wise max specificity with entropy sharpening power s
+    DAS      = class-balanced kernel target alignment CKA(A_pool, label kernel)
+    SUS      = chance-normalised held-out ridge-readout balanced accuracy
 
-Sweep variables: α  (β=1−α),  κ  (CSS saturation),  s  (entropy sharpening)
+What this script does
+---------------------
+1. Auto-discovers all OpenAI SAE checkpoints under out/checkpoints/**/final_sparse_autoencoder_openai/*.pt
+2. Maps each checkpoint to a canonical dataset and matching LoRA weights (when available)
+3. Adds Base SAE for every dataset that has adapted checkpoints
+4. Extracts raw sub-metrics once per SAE/dataset run
+5. Computes SUS to estimate whether each frozen SAE is actually useful on
+   each dataset
+6. Analytically sweeps alpha/beta/gamma/kappa/s/rho to find the largest
+   base-vs-adapted gap
 
-SAE combinations covered:
-  Existing:  Base / {caltech101, eurosat, medmnist}
-             LoRA l-3 / caltech101        (ted4zuln)
-             LoRA l-3 / eurosat           (bk3rbkcx)
-             LoRA l-2 / medmnist          (d2ygd3bb)
-  New:       Base + LoRA l-2 / {cub2002011, dtd, ucf101}
-             LoRA l-1 / caltech101        (3hu8t1bb)
-             LoRA l-1 / eurosat           (m8tn3p5s)
-             LoRA l-3 / medmnist          (91r6lhuw)
-             LoRA l-1 / medmnist          (qh3pp6cl)
-
-SAE forward passes run ONCE per combo.  Sweep is purely analytical thereafter.
+Outputs
+-------
+- out/dams_sweep_full.csv
+- out/dams_sweep_top50.csv
+- out/dams_raw_metrics.json
+- out/dams_run_manifest.json
 """
-import sys, math, os, json, itertools
-import torch
+
+import argparse
+import itertools
+import json
+import math
+import os
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
 import numpy as np
 import pandas as pd
+import torch
 from PIL import Image
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import datasets
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(__file__))
-from src.sae_training.loaders import load_sae
-from src.metrics.dams import (
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from src.metrics.dams import (  # noqa: E402
     _compute_pooled_activations,
+    compute_domain_alignment_score,
     compute_kernel_alignment,
     compute_mmd_score,
+    compute_sae_utility_score,
     extract_fss_components,
     fss_from_components,
 )
-import clip as openai_clip
+from src.sae_training.loaders import load_sae  # noqa: E402
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-LR = "/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16"
-DR = "/home/sunayana/Documents/Concept_LoRA/data"
-BB = "ViT-B/16"
-BS = 64
-BASE_SAE = "data/sae_weight/base/out.pt"
+try:  # noqa: E402
+    import clip as openai_clip
+except ImportError:  # noqa: E402
+    import CLIP_LoRA.clip as openai_clip
 
-# (label, dataset, sae_path, lora_weights_path)
-RUNS = [
-    # ── existing datasets ────────────────────────────────────────────────
-    ("Base SAE",       "caltech101", BASE_SAE, None),
-    ("LoRA SAE l-3",   "caltech101",
-     "out/checkpoints/caltech101/ted4zuln/final_sparse_autoencoder_openai/clip-vit-base-patch16_-3_resid_49152.pt",
-     f"{LR}/caltech101/16shots/seed1/lora_weights.pt"),
-    ("LoRA SAE l-1",   "caltech101",
-     "out/checkpoints/caltech101/3hu8t1bb/final_sparse_autoencoder_openai/clip-vit-base-patch16_-1_resid_49152.pt",
-     f"{LR}/caltech101/16shots/seed1/lora_weights.pt"),
 
-    ("Base SAE",       "eurosat",    BASE_SAE, None),
-    ("LoRA SAE l-3",   "eurosat",
-     "out/checkpoints/eurosat/bk3rbkcx/final_sparse_autoencoder_openai/clip-vit-base-patch16_-3_resid_49152.pt",
-     f"{LR}/eurosat/16shots/seed1/lora_weights.pt"),
-    ("LoRA SAE l-1",   "eurosat",
-     "out/checkpoints/eurosat/m8tn3p5s/final_sparse_autoencoder_openai/clip-vit-base-patch16_-1_resid_49152.pt",
-     f"{LR}/eurosat/16shots/seed1/lora_weights.pt"),
+# ----------------------------- Defaults --------------------------------------
 
-    ("Base SAE",       "medmnist",   BASE_SAE, None),
-    ("LoRA SAE l-2",   "medmnist",
-     "out/checkpoints/medmnist/d2ygd3bb/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
-     f"{LR}/medmnist/16shots/seed1/lora_weights.pt"),
-    ("LoRA SAE l-3",   "medmnist",
-     "out/checkpoints/medmnist/91r6lhuw/final_sparse_autoencoder_openai/clip-vit-base-patch16_-3_resid_49152.pt",
-     f"{LR}/medmnist/16shots/seed1/lora_weights.pt"),
-    ("LoRA SAE l-1",   "medmnist",
-     "out/checkpoints/medmnist/qh3pp6cl/final_sparse_autoencoder_openai/clip-vit-base-patch16_-1_resid_49152.pt",
-     f"{LR}/medmnist/16shots/seed1/lora_weights.pt"),
+ROOT = Path(__file__).resolve().parent
+DEFAULT_CHECKPOINT_ROOT = ROOT / "out" / "checkpoints"
+DEFAULT_BASE_SAE = ROOT / "out" / "sae_weight" / "base" / "out.pt"
+DEFAULT_DATA_ROOT = Path("/home/sunayana/Documents/Concept_LoRA/data")
+DEFAULT_LORA_ROOT = Path("/home/sunayana/Documents/Concept_LoRA/lora_weights/vitb16")
 
-    # ── new datasets ─────────────────────────────────────────────────────
-    ("Base SAE",       "cub2002011", BASE_SAE, None),
-    ("LoRA SAE l-2",   "cub2002011",
-     "out/checkpoints/cub2002011/578p9z8f/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
-     f"{LR}/cub2002011/16shots/seed1/lora_weights.pt"),
-
-    ("Base SAE",       "dtd",        BASE_SAE, None),
-    ("LoRA SAE l-2",   "dtd",
-     "out/checkpoints/dtd/sd5h6hxv/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
-     f"{LR}/dtd/16shots/seed42/lora_weights.pt"),
-
-    ("Base SAE",       "ucf101",     BASE_SAE, None),
-    ("LoRA SAE l-2",   "ucf101",
-     "out/checkpoints/ucf101/j04tcnkc/final_sparse_autoencoder_openai/clip-vit-base-patch16_-2_resid_49152.pt",
-     f"{LR}/ucf101/16shots/seed1/lora_weights.pt"),
+BACKBONE = "ViT-B/16"
+MEDMNIST_CLASSES = [
+    "adipose",
+    "background",
+    "debris",
+    "lymphocytes",
+    "mucus",
+    "smooth muscle",
+    "normal colon mucosa",
+    "cancer-associated stroma",
+    "colorectal adenocarcinoma epithelium",
 ]
 
-MED = ["adipose", "background", "debris", "lymphocytes", "mucus",
-       "smooth muscle", "normal colon mucosa",
-       "cancer-associated stroma", "colorectal adenocarcinoma epithelium"]
+# checkpoint top-folder -> canonical dataset
+CKPT_DATASET_MAP = {
+    "eurosat": "eurosat",
+    "eurosat_maple": "eurosat",
+    "caltech101": "caltech101",
+    "caltech101_maple": "caltech101",
+    "medmnist": "medmnist",
+    "medmnist_maple": "medmnist",
+    "masked_finetune": "medmnist",
+    "masked_finetune_lora": "medmnist",
+    "masked_finetune_maple": "medmnist",
+    "9g0pkku9": "medmnist",
+    "owdr2cw0": "medmnist",
+    "dtd": "dtd",
+    "cub2002011": "cub2002011",
+    "ucf101": "ucf101",
+}
 
-
-def build_clip(lp):
-    m, p = openai_clip.load(BB, device=DEVICE)
-    if lp is None:
-        return m, p
-    s = torch.load(lp, map_location=DEVICE, weights_only=False)
-    if "weights" not in s:
-        m.load_state_dict(s)
-        return m, p
-    ly, me = s["weights"], s["metadata"]
-    sc = me["alpha"] / math.sqrt(me["r"])
-    with torch.no_grad():
-        for i in range(12):
-            ld = ly.get(f"layer_{i+12}", {})
-            if not ld:
-                continue
-            blk = m.visual.transformer.resblocks[i]
-            w = blk.attn.in_proj_weight.data
-            d = w.shape[1]
-            for pr, off in [("q_proj", 0), ("k_proj", d), ("v_proj", 2*d)]:
-                try:
-                    A = ld[pr]["w_lora_A"] if isinstance(ld.get(pr), dict) else ld[f"{pr}.w_lora_A"]
-                    B = ld[pr]["w_lora_B"] if isinstance(ld.get(pr), dict) else ld[f"{pr}.w_lora_B"]
-                    w[off:off+d] += (sc * B.float().to(DEVICE) @ A.float().to(DEVICE)).to(w.dtype)
-                except Exception:
-                    pass
-    return m, p
-
-
-def find_root(path):
-    for r, dirs, _ in os.walk(path):
-        if dirs:
-            sd = os.path.join(r, dirs[0])
-            exts = {os.path.splitext(f)[1].lower()
-                    for f in os.listdir(sd) if os.path.isfile(os.path.join(sd, f))}
-            if exts & {".jpg", ".jpeg", ".png", ".bmp", ".tiff"}:
-                return r
-    return path
-
-
-class MedDS(torch.utils.data.Dataset):
-    def __init__(self, pp):
-        data = np.load(f"{DR}/pathmnist.npz")
-        self.imgs = data["test_images"]
-        self.labels = data["test_labels"].flatten().astype(int)
-        self.pp = pp
-        if_ds = datasets.ImageFolder(root=find_root(f"{DR}/pathmnist_imagefolder"))
-        im = {n.replace("_", " ").lower(): i for n, i in if_ds.class_to_idx.items()}
-        self.lm = {i: im.get(c.lower(), i) for i, c in enumerate(MED)}
-        self.nc = len(MED)
-    def __len__(self): return len(self.labels)
-    def __getitem__(self, i):
-        return self.pp(Image.fromarray(self.imgs[i])), self.lm[int(self.labels[i])]
-
-
-class ImgDS(torch.utils.data.Dataset):
-    def __init__(self, path, pp, exc=None):
-        r = find_root(path)
-        full = datasets.ImageFolder(root=r, transform=pp)
-        ex = exc or set()
-        keep = [i for i, (_, l) in enumerate(full.samples) if full.classes[l] not in ex]
-        self._ds = full; self._idx = keep
-        kc = sorted({full.classes[full.targets[i]] for i in keep})
-        self._m = {full.class_to_idx[c]: ni for ni, c in enumerate(kc)}
-        self.nc = len(kc)
-    def __len__(self): return len(self._idx)
-    def __getitem__(self, i):
-        img, l = self._ds[self._idx[i]]
-        return img, self._m[l]
-
-
-DS_PATHS = {
-    "caltech101": (f"{DR}/caltech-101",             {"BACKGROUND_Google"}),
-    "eurosat":    (f"{DR}/eurosat/2750",             None),
-    "cub2002011": (f"{DR}/cub2002011/test",          None),
-    "dtd":        (f"{DR}/DTD/images",               None),
-    "ucf101":     (f"{DR}/UCF101/UCF-101-midframes", None),
+DATASET_CFG = {
+    "eurosat": {
+        "data_dir": "eurosat/2750",
+        "exclude_classes": None,
+        "is_medmnist": False,
+    },
+    "caltech101": {
+        "data_dir": "caltech-101",
+        "exclude_classes": {"BACKGROUND_Google"},
+        "is_medmnist": False,
+    },
+    "medmnist": {
+        "data_dir": "pathmnist_imagefolder",
+        "npz": "pathmnist_imagefolder/pathmnist.npz",
+        "exclude_classes": None,
+        "is_medmnist": True,
+    },
+    "cub2002011": {
+        "data_dir": "cub2002011/test",
+        "exclude_classes": None,
+        "is_medmnist": False,
+    },
+    "dtd": {
+        "data_dir": "dtd/images",
+        "exclude_classes": None,
+        "is_medmnist": False,
+    },
+    "ucf101": {
+        "data_dir": "UCF101/UCF-101-midframes",
+        "exclude_classes": None,
+        "is_medmnist": False,
+    },
 }
 
 
-def make_dataset(ds_name, pp):
-    if ds_name == "medmnist":
-        return MedDS(pp)
-    path, exc = DS_PATHS[ds_name]
-    return ImgDS(path, pp, exc=exc)
+@dataclass
+class RunSpec:
+    kind: str
+    name: str
+    dataset: str
+    sae_path: Path
+    lora_path: Optional[Path]
+    source_group: str
+    run_id: str
 
 
-class Cap:
-    def __init__(self): self.act = None; self._h = None
-    def reg(self, blk):
-        def f(m, inp, out): self.act = out.detach().float().transpose(0, 1)
-        self._h = blk.register_forward_hook(f)
-    def rm(self):
-        if self._h: self._h.remove()
+class MedMNISTDataset(Dataset):
+    def __init__(self, data_root: Path, preprocess):
+        npz_path = data_root / "pathmnist_imagefolder" / "pathmnist.npz"
+        if not npz_path.exists():
+            npz_path = data_root / "pathmnist.npz"
+        imagefolder_root = data_root / "pathmnist_imagefolder"
+        self.preprocess = preprocess
+        self.imagefolder = None
+
+        imagefolder = datasets.ImageFolder(root=find_imagefolder_root(imagefolder_root))
+        mapped = {name.replace("_", " ").lower(): idx for name, idx in imagefolder.class_to_idx.items()}
+        self.label_map = {i: mapped.get(name.lower(), i) for i, name in enumerate(MEDMNIST_CLASSES)}
+        self.num_classes = len(MEDMNIST_CLASSES)
+
+        try:
+            data = np.load(npz_path)
+            self.images = data["test_images"]
+            self.labels = data["test_labels"].flatten().astype(int)
+        except Exception as exc:
+            print(f"[WARN] Falling back to ImageFolder for MedMNIST because npz load failed: {exc}")
+            self.images = None
+            self.labels = None
+            self.imagefolder = datasets.ImageFolder(
+                root=find_imagefolder_root(imagefolder_root),
+                transform=preprocess,
+            )
+
+    def __len__(self) -> int:
+        if self.imagefolder is not None:
+            return len(self.imagefolder)
+        return len(self.labels)
+
+    def __getitem__(self, idx: int):
+        if self.imagefolder is not None:
+            return self.imagefolder[idx]
+
+        image = Image.fromarray(self.images[idx])
+        label = self.label_map[int(self.labels[idx])]
+        return self.preprocess(image), label
 
 
-# ── Step 1: extract raw sub-metrics ──────────────────────────────────────────
-print("=" * 70)
-print(f"STEP 1 — extracting raw sub-metrics for {len(RUNS)} SAE/dataset combos")
-print("=" * 70)
+class FilteredImageFolder(Dataset):
+    def __init__(self, root: Path, preprocess, exclude_classes: Optional[set] = None):
+        image_root = find_imagefolder_root(root)
+        full = datasets.ImageFolder(root=image_root, transform=preprocess)
 
-raw_data = []
-loaded_clip = {}
+        exclude = exclude_classes or set()
+        kept = [
+            i
+            for i, (_, lbl) in enumerate(full.samples)
+            if full.classes[lbl] not in exclude
+        ]
 
-for name, ds_name, sp, lp in RUNS:
-    print(f"\n{'─'*60}\n{name} / {ds_name}")
-    sae, cfg = load_sae(sp, DEVICE)
-    sae.eval().to(DEVICE)
+        self.dataset = full
+        self.indices = kept
 
-    if lp not in loaded_clip:
-        loaded_clip[lp] = build_clip(lp)
-    model, pp = loaded_clip[lp]
-    model.eval()
+        kept_class_names = sorted({full.classes[full.targets[i]] for i in kept})
+        old_to_new = {full.class_to_idx[c]: ni for ni, c in enumerate(kept_class_names)}
+        self.label_map = old_to_new
+        self.num_classes = len(kept_class_names)
 
-    ds = make_dataset(ds_name, pp)
-    loader = DataLoader(ds, batch_size=BS, shuffle=False, num_workers=4, pin_memory=True)
-    nl = len(model.visual.transformer.resblocks)
-    li = cfg.block_layer if cfg.block_layer >= 0 else nl + cfg.block_layer
+    def __len__(self) -> int:
+        return len(self.indices)
 
-    cap = Cap()
-    cap.reg(model.visual.transformer.resblocks[li])
-    af, al = [], []
-    with torch.no_grad():
-        for imgs, labs in tqdm(loader, desc="extract", leave=False):
-            model.encode_image(imgs.to(DEVICE))
-            af.append(cap.act.cpu())
-            al.extend(labs.tolist())
-    cap.rm()
+    def __getitem__(self, idx: int):
+        image, label = self.dataset[self.indices[idx]]
+        return image, self.label_map[label]
 
-    feats = torch.cat(af, dim=0)
-    nc = ds.nc
-    print(f"  feats={feats.shape}, C={nc}, layer={cfg.block_layer}")
 
-    acts = _compute_pooled_activations(sae, feats, device=DEVICE, batch_size=256)
-    ec, _, _ = compute_kernel_alignment(sae, feats, device=DEVICE,
-                                        batch_size=256, subsample=2000,
-                                        precomputed_acts=acts)
-    css_raw, _, _ = compute_mmd_score(sae, feats, al, nc, device=DEVICE,
-                                      batch_size=256, precomputed_acts=acts)
-    p_c_given_f, h_norm, support_mask = extract_fss_components(acts, al, nc)
+class ActivationCapture:
+    def __init__(self):
+        self.act = None
+        self.handle = None
 
-    raw_data.append(dict(
-        name=name, dataset=ds_name, layer=cfg.block_layer,
-        ec=ec, css_raw=css_raw, nc=nc,
-        p_c_given_f=p_c_given_f, h_norm=h_norm, support_mask=support_mask,
-    ))
-    print(f"  EC={ec:.4f}  CSS_raw={css_raw:.6f}")
+    def register(self, block):
+        def hook(_mod, _inp, out):
+            self.act = out.detach().float().transpose(0, 1)
 
-    del sae, feats, acts
-    torch.cuda.empty_cache()
+        self.handle = block.register_forward_hook(hook)
 
-print(f"\nDone. Extracted {len(raw_data)} combos.")
+    def remove(self):
+        if self.handle is not None:
+            self.handle.remove()
 
-# ── Step 2: analytical hyperparameter sweep ───────────────────────────────────
-print("\n" + "=" * 70)
-print("STEP 2 — analytical sweep over α, κ, entropy_sharpening")
-print("=" * 70)
 
-alphas      = np.round(np.arange(0.05, 1.0, 0.05), 2)   # 0.05 … 0.95
-kappas      = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.7, 1.0]
-sharpenings = [1.0, 1.5, 2.0, 2.5, 3.0, 4.0]
+def parse_float_list(s: str) -> List[float]:
+    return [float(x.strip()) for x in s.split(",") if x.strip()]
 
-# Precompute FSS for each combo × sharpening
-fss_table = {}
-for ci, row in enumerate(raw_data):
-    for s in sharpenings:
-        fss_table[(ci, s)] = fss_from_components(
-            row['p_c_given_f'], row['h_norm'], row['support_mask'],
-            row['nc'], entropy_sharpening=s,
-        )
-print(f"FSS precomputed for {len(fss_table)} (combo, sharpening) pairs.")
 
-# Group combos: for each dataset, identify base and adapted SAEs
-datasets_seen = sorted({r['dataset'] for r in raw_data})
-base_idx  = {r['dataset']: i for i, r in enumerate(raw_data) if r['name'] == "Base SAE"}
-adapted_idxs = {}
-for ds in datasets_seen:
-    adapted_idxs[ds] = [i for i, r in enumerate(raw_data)
-                        if r['dataset'] == ds and r['name'] != "Base SAE"]
+def alpha_grid(start: float, stop: float, step: float) -> List[float]:
+    # inclusive stop with stable rounding
+    vals = []
+    x = start
+    while x <= stop + 1e-12:
+        vals.append(round(x, 6))
+        x += step
+    return vals
 
-print(f"\nDatasets: {datasets_seen}")
-for ds in datasets_seen:
-    adp = [raw_data[i]['name'] for i in adapted_idxs.get(ds, [])]
-    base = "Base SAE" if ds in base_idx else "NONE"
-    print(f"  {ds:<12}: base={base}, adapted={adp}")
 
-# For gap: sum of (best_adapted - base) DAMS over all datasets that have both
-def compute_gap_score(alpha, kappa, sharpening):
-    beta = 1.0 - alpha
-    # Compute DAMS for all combos
-    dams = {}
-    for ci, row in enumerate(raw_data):
-        css_norm = row['css_raw'] / (row['css_raw'] + kappa)
-        fss = fss_table[(ci, sharpening)]
-        dams[ci] = row['ec'] * (alpha * css_norm + beta * fss)
+def sanitize(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]+", "_", s)
 
-    total_gap = 0.0
-    per_ds_gap = {}
-    for ds in datasets_seen:
-        if ds not in base_idx or not adapted_idxs.get(ds):
+
+def parse_layer_from_filename(path: Path) -> Optional[int]:
+    m = re.search(r"_(-?\d+)_resid", path.name)
+    return int(m.group(1)) if m else None
+
+
+def find_imagefolder_root(root: Path) -> Path:
+    root = Path(root)
+    if not root.exists():
+        raise FileNotFoundError(f"Dataset root not found: {root}")
+
+    for cur, dirs, _files in os.walk(root):
+        if not dirs:
             continue
-        base_dams  = dams[base_idx[ds]]
-        best_adapted = max(dams[i] for i in adapted_idxs[ds])
-        gap = best_adapted - base_dams
-        per_ds_gap[ds] = gap
-        total_gap += gap
+        sample = Path(cur) / dirs[0]
+        if not sample.exists():
+            continue
+        exts = {
+            Path(f).suffix.lower()
+            for f in os.listdir(sample)
+            if (sample / f).is_file()
+        }
+        if exts & {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}:
+            return Path(cur)
 
-    return total_gap, per_ds_gap, dams
+    return root
 
 
-total = len(alphas) * len(kappas) * len(sharpenings)
-print(f"\nSweeping {total} combinations...")
+def dataset_available(dataset_name: str, data_root: Path) -> bool:
+    cfg = DATASET_CFG[dataset_name]
+    data_dir = data_root / cfg["data_dir"]
+    if not data_dir.exists():
+        return False
+    if cfg["is_medmnist"]:
+        npz_path = data_root / cfg["npz"]
+        return npz_path.exists()
+    return True
 
-sweep_results = []
-best_gap = -np.inf
-best_params = None
 
-for alpha, kappa, sharpening in itertools.product(alphas, kappas, sharpenings):
-    total_gap, per_ds_gap, dams_scores = compute_gap_score(alpha, kappa, sharpening)
+def make_dataset(dataset_name: str, preprocess, data_root: Path):
+    cfg = DATASET_CFG[dataset_name]
+    if cfg["is_medmnist"]:
+        return MedMNISTDataset(data_root, preprocess)
 
-    row = dict(
-        alpha=alpha, kappa=kappa, sharpening=sharpening,
-        total_gap=round(total_gap, 4),
+    return FilteredImageFolder(
+        root=data_root / cfg["data_dir"],
+        preprocess=preprocess,
+        exclude_classes=cfg["exclude_classes"],
     )
-    for ds, g in per_ds_gap.items():
-        row[f"gap_{ds}"] = round(g, 4)
-    for ci, r in enumerate(raw_data):
-        key = f"dams_{r['name'].replace(' ','_')}_{r['dataset']}"
-        row[key] = round(dams_scores[ci], 4)
-    sweep_results.append(row)
 
-    if total_gap > best_gap:
-        best_gap = total_gap
-        best_params = dict(alpha=alpha, kappa=kappa, sharpening=sharpening)
 
-print(f"Sweep complete.")
+def resolve_lora_path(dataset_name: str, lora_root: Path) -> Optional[Path]:
+    ds_root = lora_root / dataset_name / "16shots"
+    if not ds_root.exists():
+        return None
 
-# ── Step 3: report ────────────────────────────────────────────────────────────
-df = pd.DataFrame(sweep_results)
-gap_cols = ["total_gap"] + [f"gap_{ds}" for ds in datasets_seen if f"gap_{ds}" in df.columns]
-df_sorted = df.sort_values("total_gap", ascending=False)
+    preferred = ds_root / "seed1" / "lora_weights.pt"
+    if preferred.exists():
+        return preferred
 
-print("\n" + "=" * 110)
-print("TOP 20 combinations (by total gap across all datasets)")
-print("=" * 110)
-print(df_sorted[["alpha","kappa","sharpening"] + gap_cols].head(20).to_string(index=False))
+    candidates = sorted(ds_root.glob("seed*/lora_weights.pt"))
+    return candidates[0] if candidates else None
 
-print("\n" + "=" * 110)
-bp = best_params
-print(f"BEST PARAMS: α={bp['alpha']}, β={1-bp['alpha']:.2f}, κ={bp['kappa']}, sharpening={bp['sharpening']}")
-print(f"Total gap = {best_gap:.4f}")
-print("=" * 110)
 
-# ── Full DAMS table at best params ───────────────────────────────────────────
-print(f"\nDAMS table at best params (α={bp['alpha']}, κ={bp['kappa']}, s={bp['sharpening']}):")
-print(f"{'SAE':<20} {'Dataset':<12} {'Layer':>6} {'EC':>8} {'CSS_nm':>8} {'FSS':>8} {'DAMS':>8}")
-print("-" * 75)
-for ci, row in enumerate(raw_data):
-    css_norm = row['css_raw'] / (row['css_raw'] + bp['kappa'])
-    fss = fss_table[(ci, bp['sharpening'])]
-    dams = row['ec'] * (bp['alpha'] * css_norm + (1 - bp['alpha']) * fss)
-    print(f"{row['name']:<20} {row['dataset']:<12} {row['layer']:>6} "
-          f"{row['ec']:>8.4f} {css_norm:>8.4f} {fss:>8.4f} {dams:>8.4f}")
+def build_clip_model(
+    device: str,
+    lora_path: Optional[Path],
+    backbone: str = BACKBONE,
+):
+    model, preprocess = openai_clip.load(backbone, device=device)
 
-# ── Per-dataset summary at best params ───────────────────────────────────────
-print(f"\nPer-dataset gap summary at best params:")
-print(f"{'Dataset':<12} {'Base DAMS':>11} {'Best LoRA':>11} {'Gap':>8} {'Relative':>10}")
-print("-" * 55)
-_, per_ds, dams_scores = compute_gap_score(bp['alpha'], bp['kappa'], bp['sharpening'])
-for ds in datasets_seen:
-    if ds not in base_idx:
-        continue
-    b_dams = dams_scores[base_idx[ds]]
-    if adapted_idxs.get(ds):
-        best_i = max(adapted_idxs[ds], key=lambda i: dams_scores[i])
-        best_dams = dams_scores[best_i]
-        gap = best_dams - b_dams
-        rel = gap / b_dams * 100
-        best_label = raw_data[best_i]['name']
-        print(f"{ds:<12} {b_dams:>11.4f} {best_dams:>11.4f} {gap:>8.4f} {rel:>9.1f}%  ({best_label})")
-    else:
-        print(f"{ds:<12} {b_dams:>11.4f}  (no adapted SAE)")
+    if lora_path is None:
+        model.eval()
+        return model, preprocess
 
-# Save
-os.makedirs("out", exist_ok=True)
-df_sorted.to_csv("out/dams_sweep_full.csv", index=False)
-df_sorted.head(50).to_csv("out/dams_sweep_top50.csv", index=False)
+    state = torch.load(lora_path, map_location=device, weights_only=False)
+    if "weights" not in state:
+        model.load_state_dict(state, strict=False)
+        model.eval()
+        return model, preprocess
 
-# Also save raw metrics
-raw_export = [
-    {k: v for k, v in r.items() if k not in ('p_c_given_f', 'h_norm', 'support_mask')}
-    for r in raw_data
-]
-with open("out/dams_raw_metrics.json", "w") as f:
-    json.dump(raw_export, f, indent=2)
+    layers = state["weights"]
+    meta = state["metadata"]
+    scale = meta["alpha"] / math.sqrt(meta["r"])
 
-print("\nSaved: out/dams_sweep_full.csv, out/dams_sweep_top50.csv, out/dams_raw_metrics.json")
+    with torch.no_grad():
+        for i in range(12):
+            layer_dict = layers.get(f"layer_{i+12}", {})
+            if not layer_dict:
+                continue
+
+            block = model.visual.transformer.resblocks[i]
+            w = block.attn.in_proj_weight.data
+            d = w.shape[1]
+
+            for proj, off in (("q_proj", 0), ("k_proj", d), ("v_proj", 2 * d)):
+                try:
+                    if isinstance(layer_dict.get(proj), dict):
+                        A = layer_dict[proj]["w_lora_A"]
+                        B = layer_dict[proj]["w_lora_B"]
+                    else:
+                        A = layer_dict[f"{proj}.w_lora_A"]
+                        B = layer_dict[f"{proj}.w_lora_B"]
+                    delta = (scale * B.float().to(device) @ A.float().to(device)).to(w.dtype)
+                    w[off : off + d] += delta
+                except Exception:
+                    continue
+
+    model.eval()
+    return model, preprocess
+
+
+def discover_runs(
+    checkpoint_root: Path,
+    base_sae_path: Path,
+    data_root: Path,
+    lora_root: Path,
+    dataset_filter: Optional[Sequence[str]] = None,
+) -> Tuple[List[RunSpec], Dict[str, List[str]]]:
+    skipped: Dict[str, List[str]] = {
+        "non_openai": [],
+        "unknown_checkpoint_group": [],
+        "missing_dataset_data": [],
+    }
+
+    adapted: List[RunSpec] = []
+
+    ckpts = sorted(checkpoint_root.glob("**/final_sparse_autoencoder_openai/*.pt"))
+
+    if not ckpts:
+        raise FileNotFoundError(
+            f"No OpenAI SAE checkpoints found under {checkpoint_root}/**/final_sparse_autoencoder_openai/*.pt"
+        )
+
+    dataset_filter_set = set(dataset_filter) if dataset_filter else None
+
+    for ckpt in ckpts:
+        rel = ckpt.relative_to(checkpoint_root)
+        top = rel.parts[0]
+
+        dataset = CKPT_DATASET_MAP.get(top)
+        if dataset is None:
+            skipped["unknown_checkpoint_group"].append(str(ckpt))
+            continue
+
+        if dataset_filter_set and dataset not in dataset_filter_set:
+            continue
+
+        if not dataset_available(dataset, data_root):
+            skipped["missing_dataset_data"].append(f"{ckpt} -> {dataset}")
+            continue
+
+        run_id = rel.parts[1] if len(rel.parts) > 3 else top
+        if "maple" in top:
+            kind = "Maple SAE"
+        elif "masked" in top:
+            kind = "Masked SAE"
+        else:
+            kind = "Adapted SAE"
+
+        lora_path = resolve_lora_path(dataset, lora_root)
+        name = f"{kind} [{top}/{run_id}]"
+
+        adapted.append(
+            RunSpec(
+                kind=kind,
+                name=name,
+                dataset=dataset,
+                sae_path=ckpt,
+                lora_path=lora_path,
+                source_group=top,
+                run_id=run_id,
+            )
+        )
+
+    adapted.sort(key=lambda r: (r.dataset, r.source_group, r.run_id, str(r.sae_path)))
+
+    # Add one base SAE per dataset that has adapted SAEs.
+    datasets_with_adapted = sorted({r.dataset for r in adapted})
+    all_runs: List[RunSpec] = []
+
+    if not base_sae_path.exists():
+        raise FileNotFoundError(f"Base SAE checkpoint not found: {base_sae_path}")
+
+    for ds in datasets_with_adapted:
+        all_runs.append(
+            RunSpec(
+                kind="Base SAE",
+                name="Base SAE",
+                dataset=ds,
+                sae_path=base_sae_path,
+                lora_path=None,
+                source_group="base",
+                run_id="base",
+            )
+        )
+
+    all_runs.extend(adapted)
+    return all_runs, skipped
+
+
+def build_loader_for_run(
+    run: RunSpec,
+    device: str,
+    data_root: Path,
+    batch_size: int,
+    num_workers: int,
+    pin_memory: bool,
+    max_samples: Optional[int],
+    subset_seed: int,
+    subset_index_cache: Dict[str, List[int]],
+    clip_cache: Dict[Optional[str], Tuple[torch.nn.Module, object]],
+):
+    lora_key = str(run.lora_path) if run.lora_path else None
+    if lora_key not in clip_cache:
+        clip_cache[lora_key] = build_clip_model(device=device, lora_path=run.lora_path)
+
+    model, preprocess = clip_cache[lora_key]
+    dataset = make_dataset(run.dataset, preprocess, data_root)
+    num_classes = dataset.num_classes
+
+    if max_samples is not None and max_samples > 0 and len(dataset) > max_samples:
+        if run.dataset not in subset_index_cache:
+            ds_seed = subset_seed + sum(ord(c) for c in run.dataset)
+            rng = np.random.default_rng(ds_seed)
+            idx = rng.choice(len(dataset), size=max_samples, replace=False)
+            subset_index_cache[run.dataset] = sorted(int(i) for i in idx.tolist())
+        dataset = Subset(dataset, subset_index_cache[run.dataset])
+        dataset.num_classes = num_classes
+
+    loader = DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+    return model, dataset, loader
+
+
+def compute_objective(gaps: List[float], mode: str) -> float:
+    gaps = [float(g) for g in gaps if np.isfinite(g)]
+    if not gaps:
+        return float("-inf")
+
+    if mode == "total_gap":
+        return float(np.sum(gaps))
+    if mode == "mean_gap":
+        return float(np.mean(gaps))
+    if mode == "min_gap":
+        return float(np.min(gaps))
+    if mode == "balanced":
+        # Makes the gap evident across all datasets, not just one outlier.
+        return float(np.mean(gaps) + np.min(gaps))
+
+    raise ValueError(f"Unknown objective mode: {mode}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Full DAMS hyperparameter sweep")
+    parser.add_argument("--checkpoint-root", type=Path, default=DEFAULT_CHECKPOINT_ROOT)
+    parser.add_argument("--base-sae", type=Path, default=DEFAULT_BASE_SAE)
+    parser.add_argument("--data-root", type=Path, default=DEFAULT_DATA_ROOT)
+    parser.add_argument("--lora-root", type=Path, default=DEFAULT_LORA_ROOT)
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "out")
+
+    parser.add_argument("--datasets", nargs="*", choices=sorted(DATASET_CFG.keys()), default=None)
+    parser.add_argument("--dry-run-discovery", action="store_true")
+
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--pin-memory", action="store_true")
+    parser.add_argument("--ec-subsample", type=int, default=2000)
+    parser.add_argument("--sae-batch-size", type=int, default=256)
+    parser.add_argument("--max-samples", type=int, default=None)
+    parser.add_argument("--subset-seed", type=int, default=0)
+
+    parser.add_argument("--alpha-start", type=float, default=0.0)
+    parser.add_argument("--alpha-stop", type=float, default=1.0)
+    parser.add_argument("--alpha-step", type=float, default=0.025)
+    parser.add_argument(
+        "--gammas",
+        type=str,
+        default="0.0,0.1,0.2,0.3,0.4,0.5",
+        help=(
+            "Comma-separated DAS weights. For each gamma, alpha/beta split the "
+            "remaining weight: alpha=(1-gamma)*alpha_frac, beta=(1-gamma)*(1-alpha_frac)."
+        ),
+    )
+    parser.add_argument(
+        "--coverage-powers",
+        type=str,
+        default="0.0,0.25,0.5,1.0",
+        help="Comma-separated rho values for the EC reliability gate EC^rho. Use 0 to disable the gate.",
+    )
+    parser.add_argument("--das-subsample", type=int, default=2000)
+    parser.add_argument("--no-utility-score", action="store_true")
+    parser.add_argument("--utility-top-features", type=int, default=4096)
+    parser.add_argument("--utility-splits", type=int, default=3)
+    parser.add_argument("--utility-ridge", type=float, default=1.0)
+    parser.add_argument(
+        "--kappas",
+        type=str,
+        default="0.01,0.03,0.05,0.07,0.1,0.15,0.2,0.3,0.4,0.6,0.8,1.0,1.5,2.0",
+    )
+    parser.add_argument("--sharpenings", type=str, default="1.0,1.5,2.0,2.5,3.0,4.0,5.0,6.0")
+    parser.add_argument(
+        "--objective",
+        choices=["balanced", "total_gap", "mean_gap", "min_gap"],
+        default="balanced",
+    )
+
+    args = parser.parse_args()
+
+    print("=" * 90)
+    print("Discovering SAE runs")
+    print("=" * 90)
+    runs, skipped = discover_runs(
+        checkpoint_root=args.checkpoint_root,
+        base_sae_path=args.base_sae,
+        data_root=args.data_root,
+        lora_root=args.lora_root,
+        dataset_filter=args.datasets,
+    )
+
+    if not runs:
+        raise RuntimeError("No runs discovered after filtering.")
+
+    datasets_seen = sorted({r.dataset for r in runs})
+    for ds in datasets_seen:
+        rs = [r for r in runs if r.dataset == ds]
+        base_count = sum(1 for r in rs if r.kind == "Base SAE")
+        adapted_count = len(rs) - base_count
+        print(f"{ds:<12}  base={base_count} adapted={adapted_count}")
+
+    print(f"Total discovered runs: {len(runs)}")
+    if skipped["unknown_checkpoint_group"]:
+        print(f"Skipped unknown groups: {len(skipped['unknown_checkpoint_group'])}")
+    if skipped["missing_dataset_data"]:
+        print(f"Skipped missing dataset data: {len(skipped['missing_dataset_data'])}")
+
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = args.output_dir / "dams_run_manifest.json"
+    with manifest_path.open("w") as f:
+        json.dump(
+            {
+                "runs": [
+                    {
+                        "kind": r.kind,
+                        "name": r.name,
+                        "dataset": r.dataset,
+                        "sae_path": str(r.sae_path),
+                        "lora_path": str(r.lora_path) if r.lora_path else None,
+                        "source_group": r.source_group,
+                        "run_id": r.run_id,
+                    }
+                    for r in runs
+                ],
+                "skipped": skipped,
+            },
+            f,
+            indent=2,
+        )
+    print(f"Saved manifest: {manifest_path}")
+
+    if args.dry_run_discovery:
+        print("Dry-run discovery requested; exiting before feature extraction.")
+        return
+
+    # ----------------------- Step 1: Extract sub-metrics ---------------------
+    print("\n" + "=" * 90)
+    print("Step 1/3: Extracting EC/CSS/FSS components")
+    print("=" * 90)
+
+    raw_data = []
+    clip_cache: Dict[Optional[str], Tuple[torch.nn.Module, object]] = {}
+    subset_index_cache: Dict[str, List[int]] = {}
+
+    for idx, run in enumerate(runs, start=1):
+        print("\n" + "-" * 90)
+        print(f"[{idx}/{len(runs)}] {run.name} | dataset={run.dataset} | kind={run.kind}")
+
+        sae, cfg = load_sae(str(run.sae_path), args.device)
+        sae.eval().to(args.device)
+
+        model, dataset, loader = build_loader_for_run(
+            run=run,
+            device=args.device,
+            data_root=args.data_root,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            pin_memory=args.pin_memory,
+            max_samples=args.max_samples,
+            subset_seed=args.subset_seed,
+            subset_index_cache=subset_index_cache,
+            clip_cache=clip_cache,
+        )
+
+        n_layers = len(model.visual.transformer.resblocks)
+        block_layer = int(cfg.block_layer)
+        layer_index = block_layer if block_layer >= 0 else n_layers + block_layer
+
+        cap = ActivationCapture()
+        cap.register(model.visual.transformer.resblocks[layer_index])
+
+        feat_batches = []
+        labels: List[int] = []
+
+        with torch.no_grad():
+            for images, labs in tqdm(loader, desc="extract", leave=False):
+                model.encode_image(images.to(args.device))
+                feat_batches.append(cap.act.cpu())
+                labels.extend(labs.tolist())
+
+        cap.remove()
+        features = torch.cat(feat_batches, dim=0)
+        num_classes = dataset.num_classes
+
+        print(f"features={tuple(features.shape)} classes={num_classes} layer={block_layer}")
+
+        acts = _compute_pooled_activations(
+            sae,
+            features,
+            device=args.device,
+            batch_size=args.sae_batch_size,
+        )
+        ec, _, _ = compute_kernel_alignment(
+            sae,
+            features,
+            device=args.device,
+            batch_size=args.sae_batch_size,
+            subsample=args.ec_subsample,
+            precomputed_acts=acts,
+        )
+        css_raw, _, _ = compute_mmd_score(
+            sae,
+            features,
+            labels,
+            num_classes,
+            device=args.device,
+            batch_size=args.sae_batch_size,
+            precomputed_acts=acts,
+        )
+        p_c_given_f, h_norm, support_mask = extract_fss_components(acts, labels, num_classes)
+        das = compute_domain_alignment_score(
+            acts,
+            labels,
+            num_classes,
+            subsample=args.das_subsample,
+        )
+        if args.no_utility_score:
+            utility, utility_balanced_acc, utility_chance = 0.0, 0.0, 0.0
+        else:
+            utility, utility_balanced_acc, utility_chance = compute_sae_utility_score(
+                acts,
+                labels,
+                num_classes,
+                n_splits=args.utility_splits,
+                ridge=args.utility_ridge,
+                top_features=args.utility_top_features,
+            )
+
+        raw_data.append(
+            {
+                "name": run.name,
+                "kind": run.kind,
+                "dataset": run.dataset,
+                "source_group": run.source_group,
+                "run_id": run.run_id,
+                "sae_path": str(run.sae_path),
+                "lora_path": str(run.lora_path) if run.lora_path else None,
+                "layer": block_layer,
+                "layer_from_filename": parse_layer_from_filename(run.sae_path),
+                "ec": float(np.nan_to_num(ec, nan=0.0, posinf=0.0, neginf=0.0)),
+                "css_raw": float(np.nan_to_num(css_raw, nan=0.0, posinf=0.0, neginf=0.0)),
+                "das": float(np.nan_to_num(das, nan=0.0, posinf=0.0, neginf=0.0)),
+                "utility": float(np.nan_to_num(utility, nan=0.0, posinf=0.0, neginf=0.0)),
+                "utility_balanced_acc": float(np.nan_to_num(utility_balanced_acc, nan=0.0, posinf=0.0, neginf=0.0)),
+                "utility_chance": float(np.nan_to_num(utility_chance, nan=0.0, posinf=0.0, neginf=0.0)),
+                "nc": int(num_classes),
+                "p_c_given_f": p_c_given_f,
+                "h_norm": h_norm,
+                "support_mask": support_mask,
+            }
+        )
+        print(
+            f"EC={ec:.4f} CSS_raw={css_raw:.6f} DAS={das:.4f} "
+            f"SUS={utility:.4f} bal_acc={utility_balanced_acc:.4f}"
+        )
+
+        del sae, acts, features, feat_batches
+        if torch.cuda.is_available() and args.device.startswith("cuda"):
+            torch.cuda.empty_cache()
+
+    print(f"\nExtracted raw metrics for {len(raw_data)} runs.")
+
+    # ----------------------- Step 2: Hyperparameter sweep --------------------
+    print("\n" + "=" * 90)
+    print("Step 2/3: Analytical sweep")
+    print("=" * 90)
+
+    alphas = alpha_grid(args.alpha_start, args.alpha_stop, args.alpha_step)
+    kappas = parse_float_list(args.kappas)
+    sharpenings = parse_float_list(args.sharpenings)
+    gammas = parse_float_list(args.gammas)
+    coverage_powers = parse_float_list(args.coverage_powers)
+
+    # FSS cache for all (run, sharpening)
+    fss_table: Dict[Tuple[int, float], float] = {}
+    for i, row in enumerate(raw_data):
+        for s in sharpenings:
+            fss = fss_from_components(
+                row["p_c_given_f"],
+                row["h_norm"],
+                row["support_mask"],
+                row["nc"],
+                entropy_sharpening=s,
+            )
+            fss_table[(i, s)] = float(np.nan_to_num(fss, nan=0.0, posinf=0.0, neginf=0.0))
+
+    datasets = sorted({r["dataset"] for r in raw_data})
+    base_idx = {
+        r["dataset"]: i
+        for i, r in enumerate(raw_data)
+        if r["kind"] == "Base SAE"
+    }
+    adapted_idx: Dict[str, List[int]] = {
+        ds: [
+            i
+            for i, r in enumerate(raw_data)
+            if r["dataset"] == ds and r["kind"] != "Base SAE"
+        ]
+        for ds in datasets
+    }
+
+    total = len(alphas) * len(kappas) * len(sharpenings) * len(gammas) * len(coverage_powers)
+    print(
+        f"Sweeping {total} configs | alpha_fracs={len(alphas)} gammas={len(gammas)} "
+        f"kappas={len(kappas)} sharpenings={len(sharpenings)} coverage_powers={len(coverage_powers)}"
+    )
+
+    sweep_rows = []
+    best_score = -float("inf")
+    best_params = None
+
+    for alpha_frac, gamma, kappa, s, coverage_power in itertools.product(
+        alphas, gammas, kappas, sharpenings, coverage_powers
+    ):
+        if gamma < 0.0 or gamma > 1.0:
+            continue
+        alpha = (1.0 - gamma) * alpha_frac
+        beta = (1.0 - gamma) * (1.0 - alpha_frac)
+
+        dams_scores = {}
+        for i, row in enumerate(raw_data):
+            css_norm = row["css_raw"] / (row["css_raw"] + kappa)
+            fss = fss_table[(i, s)]
+            coverage_gate = row["ec"] ** coverage_power if coverage_power > 0 else 1.0
+            dams = coverage_gate * (alpha * css_norm + beta * fss + gamma * row["das"])
+            dams_scores[i] = float(np.nan_to_num(dams, nan=0.0, posinf=0.0, neginf=0.0))
+
+        per_ds_gap = {}
+        gaps = []
+        for ds in datasets:
+            if ds not in base_idx or not adapted_idx.get(ds):
+                continue
+            base_score = dams_scores[base_idx[ds]]
+            best_adapted = max(dams_scores[j] for j in adapted_idx[ds])
+            gap = best_adapted - base_score
+            per_ds_gap[ds] = gap
+            gaps.append(gap)
+
+        score = compute_objective(gaps, args.objective)
+        if not np.isfinite(score):
+            continue
+        total_gap = float(np.sum(gaps)) if gaps else float("nan")
+        mean_gap = float(np.mean(gaps)) if gaps else float("nan")
+        min_gap = float(np.min(gaps)) if gaps else float("nan")
+
+        row = {
+            "alpha_frac": alpha_frac,
+            "alpha": alpha,
+            "beta": beta,
+            "gamma": gamma,
+            "kappa": kappa,
+            "sharpening": s,
+            "coverage_power": coverage_power,
+            "objective": score,
+            "total_gap": total_gap,
+            "mean_gap": mean_gap,
+            "min_gap": min_gap,
+        }
+        for ds, gap in per_ds_gap.items():
+            row[f"gap_{ds}"] = gap
+
+        for i, r in enumerate(raw_data):
+            key = f"dams_{sanitize(r['kind'])}_{sanitize(r['dataset'])}_{sanitize(r['source_group'])}_{sanitize(r['run_id'])}_{i}"
+            row[key] = dams_scores[i]
+
+        sweep_rows.append(row)
+
+        if score > best_score:
+            best_score = score
+            best_params = {
+                "alpha_frac": alpha_frac,
+                "alpha": alpha,
+                "beta": beta,
+                "gamma": gamma,
+                "kappa": kappa,
+                "sharpening": s,
+                "coverage_power": coverage_power,
+                "objective": score,
+                "total_gap": total_gap,
+                "mean_gap": mean_gap,
+                "min_gap": min_gap,
+            }
+
+    if best_params is None:
+        raise RuntimeError("Sweep produced no valid best_params.")
+
+    # ----------------------- Step 3: Reporting -------------------------------
+    print("\n" + "=" * 90)
+    print("Step 3/3: Reporting")
+    print("=" * 90)
+
+    df = pd.DataFrame(sweep_rows)
+    df_sorted = df.sort_values("objective", ascending=False)
+
+    gap_cols = ["total_gap", "mean_gap", "min_gap"] + [
+        c for c in df_sorted.columns if c.startswith("gap_")
+    ]
+    top_cols = [
+        "alpha_frac",
+        "alpha",
+        "beta",
+        "gamma",
+        "kappa",
+        "sharpening",
+        "coverage_power",
+        "objective",
+    ] + gap_cols
+
+    print("Top 20 configurations:")
+    print(df_sorted[top_cols].head(20).to_string(index=False))
+
+    print("\nBest params:")
+    print(json.dumps(best_params, indent=2))
+
+    print("\nPer-dataset winners at best params:")
+    alpha = best_params["alpha"]
+    beta = best_params["beta"]
+    gamma = best_params["gamma"]
+    kappa = best_params["kappa"]
+    s = best_params["sharpening"]
+    coverage_power = best_params["coverage_power"]
+
+    best_dams_scores = {}
+    for i, row in enumerate(raw_data):
+        css_norm = row["css_raw"] / (row["css_raw"] + kappa)
+        fss = fss_table[(i, s)]
+        coverage_gate = row["ec"] ** coverage_power if coverage_power > 0 else 1.0
+        best_dams_scores[i] = coverage_gate * (alpha * css_norm + beta * fss + gamma * row["das"])
+
+    print(f"{'Dataset':<12} {'Base':>10} {'Best Adapted':>14} {'Gap':>10} {'Winner':>20}")
+    print("-" * 80)
+    for ds in datasets:
+        if ds not in base_idx:
+            continue
+
+        b_idx = base_idx[ds]
+        base_score = best_dams_scores[b_idx]
+
+        if adapted_idx.get(ds):
+            j = max(adapted_idx[ds], key=lambda i: best_dams_scores[i])
+            adapted_score = best_dams_scores[j]
+            gap = adapted_score - base_score
+            winner = raw_data[j]["name"]
+            print(f"{ds:<12} {base_score:>10.4f} {adapted_score:>14.4f} {gap:>10.4f} {winner:>20}")
+        else:
+            print(f"{ds:<12} {base_score:>10.4f} {'(none)':>14} {'nan':>10} {'-':>20}")
+
+    print("\nSAE Utility Score (SUS): frozen readout usefulness")
+    print(f"{'Dataset':<12} {'Base SUS':>10} {'Best SUS':>10} {'Delta':>10} {'Base bAcc':>10} {'Winner':>20}")
+    print("-" * 86)
+    utility_rows = []
+    for ds in datasets:
+        if ds not in base_idx:
+            continue
+        b_idx = base_idx[ds]
+        base_utility = raw_data[b_idx].get("utility", 0.0)
+        base_bacc = raw_data[b_idx].get("utility_balanced_acc", 0.0)
+
+        if adapted_idx.get(ds):
+            j = max(adapted_idx[ds], key=lambda i: raw_data[i].get("utility", 0.0))
+            adapted_utility = raw_data[j].get("utility", 0.0)
+            delta = adapted_utility - base_utility
+            winner = raw_data[j]["name"]
+        else:
+            adapted_utility = float("nan")
+            delta = float("nan")
+            winner = "-"
+
+        print(
+            f"{ds:<12} {base_utility:>10.4f} {adapted_utility:>10.4f} "
+            f"{delta:>10.4f} {base_bacc:>10.4f} {winner:>20}"
+        )
+        utility_rows.append(
+            {
+                "dataset": ds,
+                "base_utility": base_utility,
+                "base_balanced_acc": base_bacc,
+                "base_chance": raw_data[b_idx].get("utility_chance", 0.0),
+                "best_adapted_utility": adapted_utility,
+                "utility_delta": delta,
+                "best_adapted_name": winner,
+            }
+        )
+
+    full_csv = args.output_dir / "dams_sweep_full.csv"
+    top50_csv = args.output_dir / "dams_sweep_top50.csv"
+    raw_json = args.output_dir / "dams_raw_metrics.json"
+    utility_csv = args.output_dir / "sae_utility_summary.csv"
+
+    df_sorted.to_csv(full_csv, index=False)
+    df_sorted.head(50).to_csv(top50_csv, index=False)
+
+    raw_export = []
+    for row in raw_data:
+        r = {
+            k: v
+            for k, v in row.items()
+            if k not in {"p_c_given_f", "h_norm", "support_mask"}
+        }
+        raw_export.append(r)
+
+    with raw_json.open("w") as f:
+        json.dump(raw_export, f, indent=2)
+
+    pd.DataFrame(utility_rows).to_csv(utility_csv, index=False)
+
+    print("\nSaved:")
+    print(f"- {full_csv}")
+    print(f"- {top50_csv}")
+    print(f"- {raw_json}")
+    print(f"- {utility_csv}")
+    print(f"- {manifest_path}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,50 +1,187 @@
+import io
 import os
-from scipy.io import loadmat
+import random
+from collections import defaultdict
 
-from .oxford_pets import OxfordPets
-from .utils import Datum, DatasetBase
+import pandas as pd
+from PIL import Image
+from torch.utils.data import Dataset
+
+# 196 Stanford Cars class names, ordered by label index (from HF dataset metadata)
+STANFORD_CARS_CLASSES = [
+    'AM General Hummer SUV 2000', 'Acura RL Sedan 2012', 'Acura TL Sedan 2012',
+    'Acura TL Type-S 2008', 'Acura TSX Sedan 2012', 'Acura Integra Type R 2001',
+    'Acura ZDX Hatchback 2012', 'Aston Martin V8 Vantage Convertible 2012',
+    'Aston Martin V8 Vantage Coupe 2012', 'Aston Martin Virage Convertible 2012',
+    'Aston Martin Virage Coupe 2012', 'Audi RS 4 Convertible 2008',
+    'Audi A5 Coupe 2012', 'Audi TTS Coupe 2012', 'Audi R8 Coupe 2012',
+    'Audi V8 Sedan 1994', 'Audi 100 Sedan 1994', 'Audi 100 Wagon 1994',
+    'Audi TT Hatchback 2011', 'Audi S6 Sedan 2011', 'Audi S5 Convertible 2012',
+    'Audi S5 Coupe 2012', 'Audi S4 Sedan 2012', 'Audi S4 Sedan 2007',
+    'Audi TT RS Coupe 2012', 'BMW ActiveHybrid 5 Sedan 2012',
+    'BMW 1 Series Convertible 2012', 'BMW 1 Series Coupe 2012',
+    'BMW 3 Series Sedan 2012', 'BMW 3 Series Wagon 2012',
+    'BMW 6 Series Convertible 2007', 'BMW X5 SUV 2007', 'BMW X6 SUV 2012',
+    'BMW M3 Coupe 2012', 'BMW M5 Sedan 2010', 'BMW M6 Convertible 2010',
+    'BMW X3 SUV 2012', 'BMW Z4 Convertible 2012',
+    'Bentley Continental Supersports Conv. Convertible 2012',
+    'Bentley Arnage Sedan 2009', 'Bentley Mulsanne Sedan 2011',
+    'Bentley Continental GT Coupe 2012', 'Bentley Continental GT Coupe 2007',
+    'Bentley Continental Flying Spur Sedan 2007',
+    'Bugatti Veyron 16.4 Convertible 2009', 'Bugatti Veyron 16.4 Coupe 2009',
+    'Buick Regal GS 2012', 'Buick Rainier SUV 2007', 'Buick Verano Sedan 2012',
+    'Buick Enclave SUV 2012', 'Cadillac CTS-V Sedan 2012',
+    'Cadillac SRX SUV 2012', 'Cadillac Escalade EXT Crew Cab 2007',
+    'Chevrolet Silverado 1500 Hybrid Crew Cab 2012',
+    'Chevrolet Corvette Convertible 2012', 'Chevrolet Corvette ZR1 2012',
+    'Chevrolet Corvette Ron Fellows Edition Z06 2007',
+    'Chevrolet Traverse SUV 2012', 'Chevrolet Camaro Convertible 2012',
+    'Chevrolet HHR SS 2010', 'Chevrolet Impala Sedan 2007',
+    'Chevrolet Tahoe Hybrid SUV 2012', 'Chevrolet Sonic Sedan 2012',
+    'Chevrolet Express Cargo Van 2007', 'Chevrolet Avalanche Crew Cab 2012',
+    'Chevrolet Cobalt SS 2010', 'Chevrolet Malibu Hybrid Sedan 2010',
+    'Chevrolet TrailBlazer SS 2009',
+    'Chevrolet Silverado 2500HD Regular Cab 2012',
+    'Chevrolet Silverado 1500 Classic Extended Cab 2007',
+    'Chevrolet Express Van 2007', 'Chevrolet Monte Carlo Coupe 2007',
+    'Chevrolet Malibu Sedan 2007',
+    'Chevrolet Silverado 1500 Extended Cab 2012',
+    'Chevrolet Silverado 1500 Regular Cab 2012', 'Chrysler Aspen SUV 2009',
+    'Chrysler Sebring Convertible 2010',
+    'Chrysler Town and Country Minivan 2012', 'Chrysler 300 SRT-8 2010',
+    'Chrysler Crossfire Convertible 2008',
+    'Chrysler PT Cruiser Convertible 2008', 'Daewoo Nubira Wagon 2002',
+    'Dodge Caliber Wagon 2012', 'Dodge Caliber Wagon 2007',
+    'Dodge Caravan Minivan 1997', 'Dodge Ram Pickup 3500 Crew Cab 2010',
+    'Dodge Ram Pickup 3500 Quad Cab 2009', 'Dodge Sprinter Cargo Van 2009',
+    'Dodge Journey SUV 2012', 'Dodge Dakota Crew Cab 2010',
+    'Dodge Dakota Club Cab 2007', 'Dodge Magnum Wagon 2008',
+    'Dodge Challenger SRT8 2011', 'Dodge Durango SUV 2012',
+    'Dodge Durango SUV 2007', 'Dodge Charger Sedan 2012',
+    'Dodge Charger SRT-8 2009', 'Eagle Talon Hatchback 1998',
+    'FIAT 500 Abarth 2012', 'FIAT 500 Convertible 2012',
+    'Ferrari FF Coupe 2012', 'Ferrari California Convertible 2012',
+    'Ferrari 458 Italia Convertible 2012', 'Ferrari 458 Italia Coupe 2012',
+    'Fisker Karma Sedan 2012', 'Ford F-450 Super Duty Crew Cab 2012',
+    'Ford Mustang Convertible 2007', 'Ford Freestar Minivan 2007',
+    'Ford Expedition EL SUV 2009', 'Ford Edge SUV 2012',
+    'Ford Ranger SuperCab 2011', 'Ford GT Coupe 2006',
+    'Ford F-150 Regular Cab 2012', 'Ford F-150 Regular Cab 2007',
+    'Ford Focus Sedan 2007', 'Ford E-Series Wagon Van 2012',
+    'Ford Fiesta Sedan 2012', 'GMC Terrain SUV 2012', 'GMC Savana Van 2012',
+    'GMC Yukon Hybrid SUV 2012', 'GMC Acadia SUV 2012',
+    'GMC Canyon Extended Cab 2012', 'Geo Metro Convertible 1993',
+    'HUMMER H3T Crew Cab 2010', 'HUMMER H2 SUT Crew Cab 2009',
+    'Honda Odyssey Minivan 2012', 'Honda Odyssey Minivan 2007',
+    'Honda Accord Coupe 2012', 'Honda Accord Sedan 2012',
+    'Hyundai Veloster Hatchback 2012', 'Hyundai Santa Fe SUV 2012',
+    'Hyundai Tucson SUV 2012', 'Hyundai Veracruz SUV 2012',
+    'Hyundai Sonata Hybrid Sedan 2012', 'Hyundai Elantra Sedan 2007',
+    'Hyundai Accent Sedan 2012', 'Hyundai Genesis Sedan 2012',
+    'Hyundai Sonata Sedan 2012', 'Hyundai Elantra Touring Hatchback 2012',
+    'Hyundai Azera Sedan 2012', 'Infiniti G Coupe IPL 2012',
+    'Infiniti QX56 SUV 2011', 'Isuzu Ascender SUV 2008',
+    'Jaguar XK XKR 2012', 'Jeep Patriot SUV 2012', 'Jeep Wrangler SUV 2012',
+    'Jeep Liberty SUV 2012', 'Jeep Grand Cherokee SUV 2012',
+    'Jeep Compass SUV 2012', 'Lamborghini Reventon Coupe 2008',
+    'Lamborghini Aventador Coupe 2012',
+    'Lamborghini Gallardo LP 570-4 Superleggera 2012',
+    'Lamborghini Diablo Coupe 2001', 'Land Rover Range Rover SUV 2012',
+    'Land Rover LR2 SUV 2012', 'Lincoln Town Car Sedan 2011',
+    'MINI Cooper Roadster Convertible 2012',
+    'Maybach Landaulet Convertible 2012', 'Mazda Tribute SUV 2011',
+    'McLaren MP4-12C Coupe 2012',
+    'Mercedes-Benz 300-Class Convertible 1993',
+    'Mercedes-Benz C-Class Sedan 2012', 'Mercedes-Benz SL-Class Coupe 2009',
+    'Mercedes-Benz E-Class Sedan 2012', 'Mercedes-Benz S-Class Sedan 2012',
+    'Mercedes-Benz Sprinter Van 2012', 'Mitsubishi Lancer Sedan 2012',
+    'Nissan Leaf Hatchback 2012', 'Nissan NV Passenger Van 2012',
+    'Nissan Juke Hatchback 2012', 'Nissan 240SX Coupe 1998',
+    'Plymouth Neon Coupe 1999', 'Porsche Panamera Sedan 2012',
+    'Ram C/V Cargo Van Minivan 2012',
+    'Rolls-Royce Phantom Drophead Coupe Convertible 2012',
+    'Rolls-Royce Ghost Sedan 2012', 'Rolls-Royce Phantom Sedan 2012',
+    'Scion xD Hatchback 2012', 'Spyker C8 Convertible 2009',
+    'Spyker C8 Coupe 2009', 'Suzuki Aerio Sedan 2007',
+    'Suzuki Kizashi Sedan 2012', 'Suzuki SX4 Hatchback 2012',
+    'Suzuki SX4 Sedan 2012', 'Tesla Model S Sedan 2012',
+    'Toyota Sequoia SUV 2012', 'Toyota Camry Sedan 2012',
+    'Toyota Corolla Sedan 2012', 'Toyota 4Runner SUV 2012',
+    'Volkswagen Golf Hatchback 2012', 'Volkswagen Golf Hatchback 1991',
+    'Volkswagen Beetle Hatchback 2012', 'Volvo C30 Hatchback 2012',
+    'Volvo 240 Sedan 1993', 'Volvo XC90 SUV 2007',
+    'smart fortwo Convertible 2012',
+]
 
 
-template = ['a photo of a {}.']
+class _ParquetSplit(Dataset):
+    """Torch Dataset backed by a list of (image_bytes, label) tuples."""
+
+    def __init__(self, rows, transform=None):
+        self.rows = rows
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.rows)
+
+    def __getitem__(self, idx):
+        img_bytes, label = self.rows[idx]
+        img = Image.open(io.BytesIO(img_bytes)).convert('RGB')
+        if self.transform is not None:
+            img = self.transform(img)
+        return img, label
 
 
-class StanfordCars(DatasetBase):
+class StanfordCars:
+    """Stanford Cars 196-class dataset loaded from HuggingFace Parquet files.
 
-    dataset_dir = 'StanfordCars'
+    Expected folder structure:
+        <root>/stanford_cars/data/train-*.parquet
+        <root>/stanford_cars/data/test-*.parquet
+    """
+
+    dataset_dir = 'stanford_cars'
 
     def __init__(self, root, num_shots):
-        self.dataset_dir = os.path.join(root, self.dataset_dir)
-        self.split_path = os.path.join(self.dataset_dir, 'split_zhou_StanfordCars.json')
+        data_dir = os.path.join(root, self.dataset_dir, 'data')
 
-        self.template = template
+        train_files = sorted(
+            f for f in os.listdir(data_dir)
+            if f.startswith('train-') and f.endswith('.parquet')
+        )
+        test_files = sorted(
+            f for f in os.listdir(data_dir)
+            if f.startswith('test-') and f.endswith('.parquet')
+        )
 
-        train, val, test = OxfordPets.read_split(self.split_path, self.dataset_dir)
-        n_shots_val = min(num_shots, 4)
-        val = self.generate_fewshot_dataset(val, num_shots=n_shots_val)
-        train = self.generate_fewshot_dataset(train, num_shots=num_shots)
+        df_train = pd.concat(
+            [pd.read_parquet(os.path.join(data_dir, f)) for f in train_files],
+            ignore_index=True,
+        )
+        df_test = pd.concat(
+            [pd.read_parquet(os.path.join(data_dir, f)) for f in test_files],
+            ignore_index=True,
+        )
 
-        super().__init__(train_x=train, val=val, test=test)
-    
-    def read_data(self, image_dir, anno_file, meta_file):
-        anno_file = loadmat(anno_file)['annotations'][0]
-        meta_file = loadmat(meta_file)['class_names'][0]
-        items = []
+        # N-shot sampling from train parquet
+        by_class = defaultdict(list)
+        for row in df_train.itertuples(index=False):
+            by_class[row.label].append(row.image['bytes'])
 
-        for i in range(len(anno_file)):
-            imname = anno_file[i]['fname'][0]
-            impath = os.path.join(self.dataset_dir, image_dir, imname)
-            label = anno_file[i]['class'][0, 0]
-            label = int(label) - 1 # convert to 0-based index
-            classname = meta_file[label][0]
-            names = classname.split(' ')
-            year = names.pop(-1)
-            names.insert(0, year)
-            classname = ' '.join(names)
-            item = Datum(
-                impath=impath,
-                label=label,
-                classname=classname
-            )
-            items.append(item)
-        
-        return items
+        train_rows, val_rows = [], []
+        for label in sorted(by_class):
+            imgs = by_class[label]
+            random.shuffle(imgs)
+            n_tr = min(num_shots, len(imgs))
+            n_va = min(4, len(imgs) - n_tr)
+            train_rows.extend((b, label) for b in imgs[:n_tr])
+            val_rows.extend((b, label) for b in imgs[n_tr:n_tr + n_va])
+
+        test_rows = [(row.image['bytes'], row.label) for row in df_test.itertuples(index=False)]
+
+        self.train_x = _ParquetSplit(train_rows)
+        self.val = _ParquetSplit(val_rows)
+        self.test = _ParquetSplit(test_rows)
+
+        self.classnames = STANFORD_CARS_CLASSES
+        self.template = ['a photo of a {}.']

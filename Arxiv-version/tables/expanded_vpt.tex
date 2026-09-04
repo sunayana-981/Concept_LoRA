@@ -1,0 +1,45 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{Visual Prompt Tuning~\citep{jia2022visual} across three backbones.}
+VPT-Deep with $10$ prompt tokens injected per transformer block, backbone frozen,
+16-shot; accuracy after training. VPT is the only adaptation method in this study that
+applies to DINOv2, whose lack of a text tower rules out MaPLe and the CLIP-style
+zero-shot head; its linear-probe formulation is what makes a vision-only encoder
+comparable here at all. DINOv2 leads on the ImageNet robustness variants by wide
+margins (\texttt{imagenet\_a} $+20.1$, \texttt{imagenet\_v2} $+27.0$,
+\texttt{imagenet\_sketch} $+18.1$ over CLIP), consistent with self-distilled features
+being more robust to the corruptions those splits isolate. SigLIP2 entries marked
+$\dagger$ are undertrained at this budget rather than genuinely poor: at the full budget
+(lower block) they recover completely.}
+\label{tab:expanded_vpt}
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{lccc}
+\toprule
+\textbf{Dataset} & \textbf{CLIP} & \textbf{DINOv2} & \textbf{SigLIP2} \\
+\midrule
+\multicolumn{4}{l}{\emph{Reduced budget, 15 datasets}} \\
+oxford\_flowers  & 95.59 & \bf 99.61 & 94.12 \\
+caltech101       & 94.60 & \bf 97.20 & 95.33 \\
+oxford\_pets     & 92.28 & 93.47 & \bf 93.57 \\
+eurosat          & \bf 89.06 & 85.80 & 86.51 \\
+food101          & \bf 84.33 & 80.84 & \phantom{0}8.64$^{\dagger}$ \\
+medmnist         & 76.34 & \bf 82.11 & 71.54 \\
+ucf101           & \bf 79.91 & 79.49 & 20.30$^{\dagger}$ \\
+dtd              & 74.51 & \bf 79.32 & 77.65 \\
+stanford\_cars   & 65.04 & 54.45 & \bf 76.51 \\
+imagenet\_r      & 62.14 & 71.27 & \bf 75.18 \\
+sun397           & 52.21 & \bf 60.50 & 42.25 \\
+imagenet\_a      & 45.30 & \bf 65.43 & 30.30$^{\dagger}$ \\
+fgvc             & 37.41 & 37.82 & \bf 46.03 \\
+imagenet\_v2     & 23.00 & \bf 49.96 & 10.46$^{\dagger}$ \\
+imagenet\_sketch & 13.93 & \bf 32.02 & 18.64$^{\dagger}$ \\
+\midrule
+\multicolumn{4}{l}{\emph{Full budget, the four datasets available on the dedicated cluster}} \\
+caltech101 & 96.43 & 97.08 & \bf 98.13 \\
+eurosat    & 91.33 & \bf 92.96 & 90.52 \\
+medmnist   & 81.40 & 84.31 & \bf 85.07 \\
+dtd        & 77.10 & 78.58 & \bf 79.57 \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -11,7 +11,7 @@ template = ['a photo of a {}.']
 
 class DescribableTextures(DatasetBase):
 
-    dataset_dir = 'DTD'
+    dataset_dir = 'dtd'
 
     def __init__(self, root, num_shots):
         self.dataset_dir = os.path.join(root, self.dataset_dir)

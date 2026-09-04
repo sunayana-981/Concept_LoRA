@@ -1,0 +1,67 @@
+\begin{table*}[bp]
+\centering
+\begin{minipage}[t]{0.45\textwidth}
+\centering
+\caption{\textbf{MS vs.\ DAMS across datasets (ordered by MMD).}
+\textbf{MS}: activation-weighted semantic coherence~\cite{pach2025monosemantic}.
+\textbf{DAMS}: Domain-Aware Monosemanticity Score (ours).
+}
+\label{tab:combined_ms_dams}
+\vspace{4pt}
+\resizebox{\textwidth}{!}{%
+\setlength{\tabcolsep}{3.5pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{l cc ccc}
+\toprule
+ & \multicolumn{2}{c}{\textbf{MS}} & \multicolumn{3}{c}{\textbf{DAMS}} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-6}
+\textbf{Dataset} & G-SAE & FT-SAE & G-SAE & FT-SAE & $\Delta$ \\
+\midrule
+Caltech101 & 0.657 & \textcolor{red}{0.610} & 0.620 & \textcolor{red}{0.563} & \textcolor{red}{--0.057} \\
+DTD        & 0.520 & 0.540                   & 0.300 & {0.585}         & +0.285 \\
+UCF101     & 0.687 & 0.690                   & 0.678 & {0.818}         & +0.140 \\
+FGVC       & 0.743 & 0.760                   & 0.280 & {0.500}         & +0.500 \\
+EuroSAT    & 0.750 & 0.756                   & 0.676 & \textcolor{red}{0.629} & \textcolor{red}{--0.047} \\
+PathMNIST  & 0.840 & 0.880                   & 0.682 & {0.980}         & +0.298 \\
+\bottomrule
+\end{tabular}%
+}
+\end{minipage}%
+\hfill
+\begin{minipage}[t]{0.52\textwidth}
+\centering
+\caption{\textbf{Ablation: SAE expansion factor and training set.}
+G-SAE is trained either on ImageNet or on CC3M %$_k$: Generic SAE (ImageNet, $\times k$).
+%FT-SAE: LoRASAE ($\times 64$).
+\textbf{Bold}: best SAE result.}
+\label{tab:expansion_ablation}
+\vspace{4pt}
+\resizebox{\textwidth}{!}{%
+\setlength{\tabcolsep}{2.5pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{lc ccccccc}
+\toprule
+\rotatebox{0}{\textbf{Method}}
+  & \rotatebox{90}{\textbf{Exp.}}
+  & \rotatebox{90}{Caltech101}
+  & \rotatebox{90}{Oxford Pets}
+  & \rotatebox{90}{FGVC}
+  & \rotatebox{90}{DTD}
+  & \rotatebox{90}{UCF101}
+  & \rotatebox{90}{EuroSAT}
+  & \rotatebox{90}{PathMNIST} \\
+\midrule
+LoRA-FT          & ---         & 96.1 & 93.5 & 46.4 & 72.0 & 77.6 & 90.8 & 90.5 \\
+\cmidrule(l){1-9}
+G-SAE (IN)       & $\times32$  & 89.8 & 85.4 & 33.2 & 62.1 & 66.8 & 81.3 & 78.5 \\
+G-SAE (IN)       & $\times64$  & 92.4 & 88.6 & 37.1 & 65.8 & 70.4 & 85.0 & 82.9 \\
+G-SAE (IN)       & $\times128$ & 93.1 & 89.5 & 38.4 & 66.9 & 71.6 & 86.2 & 83.8 \\
+\cmidrule(l){1-9}
+G-SAE (CC3M)     & $\times64$  & 47.8 & 28.3 &  5.8 & 35.7 & 43.3 & 49.8 & 31.0 \\
+\cmidrule(l){1-9}
+FT-SAE           & $\times64$  & \bf 95.7 & \bf 92.4 & \bf 44.5 & \bf 71.8 & \bf 76.2 & \bf 90.7 & \bf 88.7 \\
+\bottomrule
+\end{tabular}%
+}
+\end{minipage}
+\end{table*}

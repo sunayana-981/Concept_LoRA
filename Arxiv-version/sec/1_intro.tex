@@ -1,0 +1,65 @@
+
+Large pre-trained models (LPTMs) such as CLIP \citep{radford2021learning}, SigLIP \citep{zhai2023sigmoid}, DINO \citep{caron2021emerging}, and ALIGN \citep{jia2021scaling} have become foundational across different tasks \citep{bommasani2021opportunities}, particularly for several vision tasks. Their general-purpose representations often fall short on specialized domains such as satellite imagery or medical images, necessitating domain adaptation. A rich line of work addresses this through parameter-efficient fine-tuning: LoRA \citep{hu2022lora} introduces low-rank updates, prompt-based methods such as CoOp and CoCoOp \citep{zhou2022learning,zhou2022conditional}, and MaPLe \citep{khattak2023maple} learn task-specific context tokens. Adapter-based \citep{gao2024clipadapter} and visual prompt tuning \citep{jia2022visual} approaches modify intermediate or input-level representations while keeping the backbone frozen. Despite their effectiveness, how adapters reshape internal representations and affect prior interpretability analyses remain largely unexplored.
+
+%As these systems are deployed in high-stakes settings \citep{singhal2023large, cui2024survey, guha2024legalbench}, 
+Understanding what the LPTMs represent internally is no longer optional \citep{rauker2023transparent, kim2018interpretability} as they are used widely. Sparse autoencoders (SAEs) decompose polysemantic activations into sparse, monosemantic features and have emerged as a principled tool for resolving superposition \citep{cunningham2024sparse, rajamanoharan2024improving} with extensions to vision transformers \citep{gandelsman2024interpreting, gao2025scaling}. A growing body of work trains a generic SAE on base models using a large, representative dataset and reuses them as fixed analysis tools \citep{rao2024discover, karvonen2025saevision, pach2025monosemantic}. Lim et al.\ \citep{lim2024patchsae} apply a base-model SAE to MaPLe-adapted CLIP and find that prompt-based adaptation largely remaps existing concepts. Their analysis, however, is restricted to prompt tuning on near-domain benchmarks. This assumption breaks down under stronger adaptation methods and larger domain shifts.
+
+
+
+
+Neuron-level analysis can reveal if pretrained SAE features are preserved, repurposed, or replaced during adaptation. Can the SAE features interpret a model after adapting it? How do we understand the impact of the adapter on the activation space? How much can we trust a fine-tuned model's behavior \citep{durrani2020analyzing, csiszarik2021similarity}? If adaptation merely remaps existing features, reliability rests on the quality of remapping.  If it induces new representations, we need tools to verify their faithfulness to the target distribution. Recent language-model results provide a useful warning sign: frozen SAE features can underperform linear probes on OOD probing \citep{smith2025negative}; SAEs can fail to outperform simple baselines under data scarcity, class imbalance, or covariate shift \citep{kantamneni2025sparse}; and under compositional OOD shift, the failure can localise to the dictionary rather than the inference procedure \citep{pacela2026stopprobingstartcoding}.
+These results suggest that SAE dictionaries may encode training-distribution co-occurrence structure as fixed directions. If so, shifting the activation distribution should make those directions a worse basis for interpretation. {We study this failure mode for vision models under lightweight fine tuning }, where practitioners often want to reuse interpretability tools after adapting a foundation model to a specialised domain. We also answer the following question: If the generic SAE degrades after adaptation, how can we restore its interpretability, reconstruction fidelity and causal faithfulness after adaptation?
+
+We study the impact of adaptation on interpretability on different LPTMs, adapters, and SAEs in this paper. We show that generic SAEs fall short in various interpretability metrics as the distribution of the target domain moves away. We demonstrate that training a specific {\em finetuned SAE} on the adapted model using the target dataset more than compensates for this loss. To ensure our findings generalize, we design our experimental setup along three axes. First, we study four vision encoders spanning distinct pretraining objectives: CLIP \citep{radford2021learning}, SigLIP~2 \citep{tschannen2025siglip2}, ALIGN \citep{jia2021scaling}, and DINOv2 \citep{oquab2024dinov2}. This selection disentangles the role of language grounding from visual feature quality. Second, we consider adaptation families spanning a spectrum of modification aggressiveness: weight-space LoRA \citep{hu2022lora}, and the prompt-based methods MaPLe \citep{khattak2023maple}, TAP \citep{ding2025tap}, and visual prompt tuning \citep{jia2022visual}. Third, we test on 16 datasets whose distributions vary systematically from ImageNet used for pretraining, including fine-grained recognition (StanfordCars, FGVCAircraft, Flowers102, OxfordPets), scene and action understanding (SUN397, UCF101), specialized domains (EuroSAT, PathMNIST, ChestMNIST, DTD), and ImageNet variants (ImageNet, ImageNetV2, ImageNet-Sketch, ImageNet-A). This tiered design tests whether SAE degradation is a smooth function of domain distance or exhibits sharp phase transitions. We focus on Gated SAEs \citep{rajamanoharan2024improving} in their patch-based variant, enabling both global and local concept analysis, but show the conclusion also holds for the Matryoshka, Top-$k$ \citep{gao2025scaling}, and JumpReLU \citep{rajamanoharan2024jumprelu} variants of SAEs.
+
+\comment{
+CLIP+LoRA
+	One table for ClassAccuracy that lists all 4 SAEs
+	One table for SAE metrics that lists all SAEs
+
+CLIP+DoRA
+	Two similar tables
+
+CLIP+MaPLe
+	Two similar tables
+
+CLIP+TAP
+	Two similar tables
+
+
+
+SigLIP+LoRA
+	One table for ClassAccuracy that lists all 4 SAEs
+	One table for SAE metrics that lists all SAEs
+
+SigLIP+DoRA
+	Two similar tables
+
+SigLIP+VPT
+	Two similar tables
+
+
+DINO+LoRA
+	One table for ClassAccuracy that lists all 4 SAEs
+	One table for SAE metrics that lists all SAEs
+
+DINO+DoRA
+	Two similar tables
+
+DINO+VPT
+	Two similar tables
+
+
+ALIGN+LoRA
+	One table for ClassAccuracy that lists all 4 SAEs
+	One table for SAE metrics that lists all SAEs
+
+ALGIN+DoRA
+	Two similar tables
+
+ALIGN+VPT
+	Two similar tables
+}
+
+
+

@@ -1,0 +1,40 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{MaPLe~\citep{khattak2023maple} multi-modal prompt learning, CLIP only.}
+16-shot; only \texttt{prompt\_learner} is trained and the backbone stays frozen.
+Baseline is the untrained-prompt initialisation. MaPLe is restricted to CLIP by
+architecture, not by choice: its deep visual prompts are coupled to a paired text tower
+through a learned projection, which DINOv2 does not have and which ALIGN's convolutional
+vision tower cannot accept a token sequence into. Gains are steady but modest, largest
+on the wide-vocabulary datasets (\texttt{ucf101}, \texttt{sun397},
+\texttt{stanford\_cars}). \texttt{medmnist} is the informative exception: prompt tuning
+alone barely moves it at three epochs and recovers only to $19.8$ at five, because
+pathology tissue lies far enough outside CLIP's pretraining distribution that steering
+existing features has little to grip --- the mechanistic asymmetry between prompt-based
+and weight-space adaptation that Sec.~\ref{sec:obs:adapter} discusses, visible in raw
+accuracy.}
+\label{tab:expanded_maple}
+\setlength{\tabcolsep}{8pt}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Dataset} & \textbf{Baseline} & \textbf{3 epochs} & $\mathbf{\Delta}$ & \textbf{5 epochs} \\
+\midrule
+ucf101           & 59.85 & 71.93 & $\bf +12.1$ & --- \\
+sun397           & 57.54 & 69.51 & $\bf +12.0$ & --- \\
+stanford\_cars   & 53.28 & 65.28 & $\bf +12.0$ & --- \\
+fgvc             & 19.35 & 29.10 & $+9.8$ & --- \\
+eurosat          & 44.56 & 53.73 & $+9.2$ & 54.64 \\
+oxford\_flowers  & 64.31 & 72.65 & $+8.3$ & --- \\
+dtd              & 44.38 & 52.65 & $+8.3$ & 53.33 \\
+imagenet\_sketch & 43.15 & 51.11 & $+8.0$ & --- \\
+imagenet\_v2     & 58.45 & 64.19 & $+5.7$ & --- \\
+imagenet\_r      & 73.03 & 78.13 & $+5.1$ & --- \\
+oxford\_pets     & 84.49 & 88.95 & $+4.5$ & --- \\
+imagenet\_a      & 48.50 & 52.81 & $+4.3$ & --- \\
+caltech101       & 90.83 & 92.98 & $+2.2$ & 93.43 \\
+food101          & 88.67 & 89.94 & $+1.3$ & --- \\
+medmnist         & 16.91 & 16.38 & $-0.5$ & 19.76 \\
+\bottomrule
+\end{tabular}
+\end{table}

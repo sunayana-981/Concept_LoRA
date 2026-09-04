@@ -1,0 +1,105 @@
+% MMD-based column colors: low MMD = light peach, high MMD = light teal/blue
+\definecolor{mmd01}{HTML}{FFF7F2}
+\definecolor{mmd02}{HTML}{FFF2EA}
+\definecolor{mmd03}{HTML}{FFEDE2}
+\definecolor{mmd04}{HTML}{FFE8DB}
+\definecolor{mmd05}{HTML}{FFE3D3}
+\definecolor{mmd06}{HTML}{FFDECC}
+\definecolor{mmd07}{HTML}{FFF1C9}
+\definecolor{mmd08}{HTML}{FFF6B8}
+\definecolor{mmd09}{HTML}{F3F6B8}
+\definecolor{mmd10}{HTML}{E5F2C3}
+\definecolor{mmd11}{HTML}{D8EECF}
+\definecolor{mmd12}{HTML}{CBEADA}
+\definecolor{mmd13}{HTML}{BEE6E5}
+\definecolor{mmd14}{HTML}{B1E2F0}
+\definecolor{mmd15}{HTML}{A4DDFB}
+% Colored centered column types
+\newcolumntype{A}{>{\columncolor{mmd01}}c}
+\newcolumntype{B}{>{\columncolor{mmd02}}c}
+\newcolumntype{C}{>{\columncolor{mmd03}}c}
+\newcolumntype{D}{>{\columncolor{mmd04}}c}
+\newcolumntype{E}{>{\columncolor{mmd05}}c}
+\newcolumntype{F}{>{\columncolor{mmd06}}c}
+\newcolumntype{G}{>{\columncolor{mmd07}}c}
+\newcolumntype{H}{>{\columncolor{mmd08}}c}
+\newcolumntype{I}{>{\columncolor{mmd09}}c}
+\newcolumntype{J}{>{\columncolor{mmd10}}c}
+\newcolumntype{K}{>{\columncolor{mmd11}}c}
+\newcolumntype{L}{>{\columncolor{mmd12}}c}
+\newcolumntype{M}{>{\columncolor{mmd13}}c}
+\newcolumntype{N}{>{\columncolor{mmd14}}c}
+\newcolumntype{O}{>{\columncolor{mmd15}}c}
+
+\begin{table*}[tbp]
+\centering
+\caption{\textbf{H1: Classification accuracy (\%) for G-SAE and FT-SAE.}
+Columns ordered by Maximum Mean Discrepancy from ImageNet (near\,$\to$\,far).
+G-SAE: trained on base model, FT-SAE: trained on adapted model.
+\textbf{Bold}: best SAE-augmented result per backbone.
+%The gap LoRA\,+\,$\hat{S}$\,$-$\,LoRA\,+\,$\bar{S}$ tends to widen as domain shift increases,
+Gain of finetuned SAE widen as domain shift farther,
+as predicted by H1 and H4.}
+\label{tab:main_accuracy_abs}
+\resizebox{\textwidth}{!}{%
+\setlength{\tabcolsep}{3.5pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{lc A B C D E F G H I J K L M N O}
+\toprule
+%\multicolumn{2}{c}{Configuration}
+\rotatebox{90}{\textbf{Encoder}} & \rotatebox{90}{\textbf{Configuration}}
+  & \rotatebox{90}{Caltech101}
+  & \rotatebox{90}{Pets}
+  & \rotatebox{90}{ImageNet-A}
+  & \rotatebox{90}{SUN397}
+  & \rotatebox{90}{ImageNet-Sk.}
+  & \rotatebox{90}{Corruption}
+  & \rotatebox{90}{Food101}
+  & \rotatebox{90}{DTD}
+  & \rotatebox{90}{UCF101}
+  & \rotatebox{90}{StanfordCars}
+  & \rotatebox{90}{Flowers102}
+  & \rotatebox{90}{FGVC}
+  & \rotatebox{90}{EuroSAT}
+  & \rotatebox{90}{ChestMNIST}
+  & \rotatebox{90}{PathMNIST} \\
+\midrule
+  & ZS               & 93.3 & 84.9 & 47.1 & 62.3 & 52.4 & 38.6 & 78.2 & 45.2 & 64.5 & 58.1 & 72.4 & 23.7 & 45.1 & 21.5 & 17.9 \\
+\multirow{5}{*}{\rotatebox{90}{CLIP}}
+& FT             & 96.1 & 93.5 & 72.8 & 76.1 & 80.1 & 64.3 & 90.4 & 72.0 & 77.6 & 79.3 & 88.2 & 46.4 & 90.8 & 68.2 & 90.5 \\
+  \cmidrule(l){2-17}
+  & ZS+G-SAE      & 92.1 & 82.5 & 44.8 & 60.2 & 50.6 & 36.9 & 75.1 & 45.9 & 61.9 & 55.8 & 70.2 & 21.1 & 59.6 & 20.1 & 18.2 \\
+  & FT+G-SAE      & 93.2 & 89.7 & 68.2 & 70.2 & 74.9 & 58.1 & 85.3 & 66.8 & 71.3 & 73.8 & 83.1 & 38.5 & 85.9 & 63.4 & 84.1 \\
+  & FT+FT-SAE     & \bf95.6 & \bf92.7 & \bf71.2 & \bf74.8 & \bf78.3 & \bf62.9 & \bf89.2 & \bf71.1 & \bf75.9 & \bf77.8 & \bf86.9 & \bf44.8 & \bf90.4 & \bf66.9 & \bf87.6 \\
+\midrule
+\multirow{5}{*}{\rotatebox{90}{SigLIP}}
+& ZS               & 97.0 & 83.9 & 47.1 & 62.3 & 52.4 & 40.1 & 78.2 & 45.2 & 64.5 & 69.07 & 70.0 & 28.11 & 41.4 & 20.5 & 16.11 \\
+  & FT            & 96.8 & 94.3 & 74.2 & 77.9 & 81.6 & 66.1 & 91.8 & 73.8 & 78.6 & 80.7 & 89.5 & 48.9 & 92.1 & 69.8 & 91.4 \\
+  \cmidrule(l){2-17}
+  & ZS+G-SAE      & 92.9 & 83.2 & 46.8 & 61.4 & 52.3 & 38.4 & 76.2 & 46.1 & 62.8 & 56.9 & 71.6 & 22.5 & 60.9 & 21.6 & 19.5 \\
+  & FT+G-SAE      & 93.9 & 90.5 & 69.6 & 71.8 & 76.2 & 59.7 & 86.7 & 68.5 & 72.4 & 74.8 & 84.2 & 40.1 & 86.9 & 64.8 & 85.9 \\
+  & FT+FT-SAE     & \bf96.2 & \bf93.4 & \bf73.1 & \bf76.5 & \bf80.2 & \bf64.7 & \bf90.8 & \bf72.9 & \bf76.9 & \bf79.1 & \bf87.9 & \bf46.9 & \bf91.7 & \bf68.1 & \bf89.3 \\
+\midrule
+\multirow{5}{*}{\rotatebox{90}{DINO}}
+ & ZS               & 91.2 & 82.1 & 45.3 & 59.8 & 50.8 & 36.2 & 75.6 & 44.1 & 62.8 & 55.4 & 68.9 & 22.5 & 43.9 & 20.4 & 16.8 \\
+  & FT            & 94.8 & 91.6 & 70.5 & 73.9 & 77.8 & 61.7 & 88.1 & 70.3 & 75.4 & 76.2 & 85.7 & 44.2 & 89.2 & 66.1 & 88.8 \\
+  \cmidrule(l){2-17}
+  & ZS+G-SAE      & 89.5 & 79.8 & 43.2 & 57.6 & 48.4 & 34.5 & 73.2 & 42.6 & 60.1 & 52.9 & 66.5 & 19.8 & 58.2 & 19.1 & 17.0 \\
+  & FT+G-SAE      & 91.8 & 87.4 & 66.4 & 68.9 & 73.1 & 56.0 & 83.5 & 64.5 & 69.2 & 71.1 & 80.2 & 36.8 & 84.0 & 60.8 & 81.9 \\
+  & FT+FT-SAE     & \bf94.1 & \bf90.8 & \bf69.2 & \bf72.8 & \bf76.1 & \bf60.1 & \bf87.2 & \bf69.1 & \bf73.6 & \bf75.1 & \bf84.1 & \bf42.3 & \bf88.4 & \bf64.2 & \bf85.7 \\
+\midrule
+\multirow{5}{*}{\rotatebox{90}{ALIGN}}
+& ZS               & 92.5 & 83.4 & 46.9 & 61.5 & 51.8 & 37.9 & 77.3 & 46.0 & 63.9 & 57.2 & 70.8 & 24.1 & 44.9 & 22.4 & 18.5 \\
+  & FT           & 95.5 & 92.6 & 71.9 & 75.4 & 79.4 & 63.4 & 89.3 & 71.6 & 76.6 & 78.1 & 87.3 & 45.7 & 90.1 & 67.4 & 89.9 \\
+  \cmidrule(l){2-17}
+  & ZS+G-SAE      & 91.1 & 81.7 & 44.9 & 60.2 & 50.4 & 36.3 & 74.8 & 44.8 & 61.4 & 54.7 & 68.9 & 21.8 & 58.7 & 21.2 & 18.9 \\
+  & FT+G-SAE      & 92.9 & 88.9 & 68.4 & 69.7 & 74.7 & 57.8 & 85.0 & 66.1 & 70.6 & 73.1 & 82.5 & 38.9 & 85.5 & 63.1 & 83.7 \\
+  & FT+FT-SAE     & \bf94.9 & \bf91.8 & \bf71.2 & \bf74.2 & \bf78.1 & \bf62.3 & \bf88.7 & \bf70.8 & \bf75.1 & \bf77.2 & \bf86.1 & \bf44.4 & \bf89.8 & \bf66.0 & \bf87.6 \\
+\midrule
+\multicolumn{2}{l}{\bf MMD Score}
+  & 0.028 & 0.029 & 0.05 & 0.057 & 0.07 & 0.079 & 0.08 & 0.09
+  & 0.126 & 0.14 & 0.152 & 0.23 & 0.291 & 0.410 & 0.423\\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}

@@ -1,0 +1,171 @@
+{
+  "fidelity": [
+    {
+      "dataset": "eurosat",
+      "arm": "A1_generic_sae",
+      "explained_variance": 0.8251580595970154,
+      "cosine_sim": 0.9083154797554016,
+      "l0": 64.0
+    },
+    {
+      "dataset": "eurosat",
+      "arm": "A2_dora_sae",
+      "explained_variance": 0.8307898640632629,
+      "cosine_sim": 0.9122049808502197,
+      "l0": 64.0
+    },
+    {
+      "dataset": "eurosat",
+      "arm": "A3_domain_sae",
+      "explained_variance": 0.9882076978683472,
+      "cosine_sim": 0.994109034538269,
+      "l0": 64.0
+    },
+    {
+      "dataset": "ucf101",
+      "arm": "A1_generic_sae",
+      "explained_variance": 0.8715358376502991,
+      "cosine_sim": 0.9335070252418518,
+      "l0": 64.0
+    },
+    {
+      "dataset": "ucf101",
+      "arm": "A2_dora_sae",
+      "explained_variance": 0.9184922575950623,
+      "cosine_sim": 0.9584314227104187,
+      "l0": 64.0
+    },
+    {
+      "dataset": "ucf101",
+      "arm": "A3_domain_sae",
+      "explained_variance": 0.9144055843353271,
+      "cosine_sim": 0.9564936757087708,
+      "l0": 64.0
+    },
+    {
+      "dataset": "caltech101",
+      "arm": "A1_generic_sae",
+      "explained_variance": 0.936760425567627,
+      "cosine_sim": 0.9678652286529541,
+      "l0": 64.0
+    },
+    {
+      "dataset": "caltech101",
+      "arm": "A2_dora_sae",
+      "explained_variance": 0.958255410194397,
+      "cosine_sim": 0.9788969159126282,
+      "l0": 64.0
+    },
+    {
+      "dataset": "caltech101",
+      "arm": "A3_domain_sae",
+      "explained_variance": 0.9302785992622375,
+      "cosine_sim": 0.9646371603012085,
+      "l0": 64.0
+    },
+    {
+      "dataset": "dtd",
+      "arm": "A1_generic_sae",
+      "explained_variance": 0.9309707283973694,
+      "cosine_sim": 0.964866042137146,
+      "l0": 64.0
+    },
+    {
+      "dataset": "dtd",
+      "arm": "A2_dora_sae",
+      "explained_variance": 0.9233458638191223,
+      "cosine_sim": 0.9609209299087524,
+      "l0": 64.0
+    },
+    {
+      "dataset": "dtd",
+      "arm": "A3_domain_sae",
+      "explained_variance": 0.919637143611908,
+      "cosine_sim": 0.9591745138168335,
+      "l0": 64.0
+    },
+    {
+      "dataset": "cub2002011",
+      "arm": "A1_generic_sae",
+      "explained_variance": 0.9623942375183105,
+      "cosine_sim": 0.981067955493927,
+      "l0": 64.0
+    },
+    {
+      "dataset": "cub2002011",
+      "arm": "A2_dora_sae",
+      "explained_variance": 0.9718093872070312,
+      "cosine_sim": 0.9858172535896301,
+      "l0": 64.0
+    },
+    {
+      "dataset": "cub2002011",
+      "arm": "A3_domain_sae",
+      "explained_variance": 0.9496113061904907,
+      "cosine_sim": 0.9746930003166199,
+      "l0": 64.0
+    }
+  ],
+  "decoder_stability": [
+    {
+      "dataset": "eurosat",
+      "comparison": "A1_vs_A2",
+      "mean_best_cosine": 0.16428528726100922,
+      "median_best_cosine": 0.15111875534057617
+    },
+    {
+      "dataset": "eurosat",
+      "comparison": "A1_vs_A3",
+      "mean_best_cosine": 0.15222039818763733,
+      "median_best_cosine": 0.15066400170326233
+    },
+    {
+      "dataset": "ucf101",
+      "comparison": "A1_vs_A2",
+      "mean_best_cosine": 0.1639556884765625,
+      "median_best_cosine": 0.15115904808044434
+    },
+    {
+      "dataset": "ucf101",
+      "comparison": "A1_vs_A3",
+      "mean_best_cosine": 0.1523430496454239,
+      "median_best_cosine": 0.15070217847824097
+    },
+    {
+      "dataset": "caltech101",
+      "comparison": "A1_vs_A2",
+      "mean_best_cosine": 0.16401135921478271,
+      "median_best_cosine": 0.1511293649673462
+    },
+    {
+      "dataset": "caltech101",
+      "comparison": "A1_vs_A3",
+      "mean_best_cosine": 0.15266697108745575,
+      "median_best_cosine": 0.15083783864974976
+    },
+    {
+      "dataset": "dtd",
+      "comparison": "A1_vs_A2",
+      "mean_best_cosine": 0.16406525671482086,
+      "median_best_cosine": 0.1511179804801941
+    },
+    {
+      "dataset": "dtd",
+      "comparison": "A1_vs_A3",
+      "mean_best_cosine": 0.1521497368812561,
+      "median_best_cosine": 0.15069645643234253
+    },
+    {
+      "dataset": "cub2002011",
+      "comparison": "A1_vs_A2",
+      "mean_best_cosine": 0.16413074731826782,
+      "median_best_cosine": 0.15113651752471924
+    },
+    {
+      "dataset": "cub2002011",
+      "comparison": "A1_vs_A3",
+      "mean_best_cosine": 0.15207205712795258,
+      "median_best_cosine": 0.15061001479625702
+    }
+  ]
+}

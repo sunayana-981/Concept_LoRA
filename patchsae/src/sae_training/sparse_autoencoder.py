@@ -10,6 +10,7 @@ import os
 import pickle
 
 import einops
+import numpy as np
 import torch
 import torch.nn.functional as F
 from geom_median.torch import compute_geometric_median
@@ -20,6 +21,71 @@ from tqdm import tqdm
 from transformer_lens.hook_points import HookedRootModule, HookPoint
 
 from src.sae_training.config import ViTSAERunnerConfig
+
+
+class _JumpReLUSTE(torch.autograd.Function):
+    """Straight-through gradient estimator for the JumpReLU activation
+    (Rajamanoharan et al. 2024, "Jumping Ahead"). The forward pass is an
+    exact hard threshold (zero gradient almost everywhere), so backward
+    substitutes a rectangle-kernel density estimate of how the threshold
+    boundary moves, letting gradients reach both the pre-activation and the
+    learned per-unit threshold.
+    """
+
+    @staticmethod
+    def forward(ctx, hidden_pre_relu, threshold, bandwidth):
+        ctx.save_for_backward(hidden_pre_relu, threshold)
+        ctx.bandwidth = bandwidth
+        mask = (hidden_pre_relu > threshold).to(hidden_pre_relu.dtype)
+        return hidden_pre_relu * mask
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        hidden_pre_relu, threshold = ctx.saved_tensors
+        bandwidth = ctx.bandwidth
+        mask = (hidden_pre_relu > threshold).to(hidden_pre_relu.dtype)
+        grad_hidden_pre = grad_output * mask
+        in_kernel = (torch.abs(hidden_pre_relu - threshold) < bandwidth / 2).to(hidden_pre_relu.dtype)
+        kernel = in_kernel / bandwidth
+        # Uses `threshold` (not `hidden_pre_relu`) as the coefficient here --
+        # this is not a product-rule derivative of z*H(z-theta) (which would
+        # naively suggest using z), it's the paper's own stated STE (Eq. for
+        # d/dtheta JumpReLU_theta(z) := -theta/bandwidth * K((z-theta)/bandwidth)),
+        # confirmed against SAELens's reference implementation
+        # (jumprelu_sae.py's `ste = (threshold / bandwidth) * rectangle(...)`)
+        # -- a deliberate near-boundary approximation since the kernel only
+        # has support where z is already within `bandwidth` of theta.
+        grad_threshold = grad_output * (-threshold) * kernel
+        return grad_hidden_pre, grad_threshold, None
+
+
+class _StepSTE(torch.autograd.Function):
+    """Straight-through estimator for the Heaviside step H(z-theta), used to
+    compute the JumpReLU SAE's L0 sparsity term (Rajamanoharan et al. 2024).
+
+    Forward returns the exact (hard, non-differentiable) 0/1 indicator, so
+    the resulting L0 value is a true sparsity count rather than a smooth
+    proxy; backward substitutes the same rectangle-kernel density estimate
+    as _JumpReLUSTE, confirmed against SAELens's reference `Step` class
+    (jumprelu_sae.py): `ste = (1/bandwidth) * rectangle(...) * grad_output`
+    for both the pre-activation and (negated) threshold gradients.
+    """
+
+    @staticmethod
+    def forward(ctx, hidden_pre_relu, threshold, bandwidth):
+        ctx.save_for_backward(hidden_pre_relu, threshold)
+        ctx.bandwidth = bandwidth
+        return (hidden_pre_relu > threshold).to(hidden_pre_relu.dtype)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        hidden_pre_relu, threshold = ctx.saved_tensors
+        bandwidth = ctx.bandwidth
+        in_kernel = (torch.abs(hidden_pre_relu - threshold) < bandwidth / 2).to(hidden_pre_relu.dtype)
+        kernel = in_kernel / bandwidth
+        grad_hidden_pre = grad_output * kernel
+        grad_threshold = grad_output * (-kernel)
+        return grad_hidden_pre, grad_threshold, None
 
 
 class SparseAutoencoder(HookedRootModule):
@@ -67,6 +133,18 @@ class SparseAutoencoder(HookedRootModule):
                 torch.zeros(self.d_sae, dtype=self.dtype, device=self.device)
             )
 
+        if getattr(self.cfg, "jumprelu_sae", False):
+            import math as _math
+
+            self.log_threshold = nn.Parameter(
+                torch.full(
+                    (self.d_sae,),
+                    _math.log(self.cfg.jumprelu_init_threshold),
+                    dtype=self.dtype,
+                    device=self.device,
+                )
+            )
+
         with torch.no_grad():
             # Anthropic normalize this to have unit columns
             self.W_dec.data /= torch.norm(self.W_dec.data, dim=1, keepdim=True)
@@ -85,6 +163,10 @@ class SparseAutoencoder(HookedRootModule):
     def forward(self, x, dead_neuron_mask=None):
         if self.cfg.gated_sae:
             return self.forward_gated(x, dead_neuron_mask)
+        elif getattr(self.cfg, "topk_sae", False):
+            return self.forward_topk(x, dead_neuron_mask)
+        elif getattr(self.cfg, "jumprelu_sae", False):
+            return self.forward_jumprelu(x, dead_neuron_mask)
         else:
             return self.forward_standard(x, dead_neuron_mask)
 
@@ -176,6 +258,145 @@ class SparseAutoencoder(HookedRootModule):
 
         return sae_out, feature_acts, loss_dict
 
+    def forward_topk(self, x, dead_neuron_mask=None):
+        """Top-K SAE (Gao et al. 2024, "Scaling and evaluating sparse
+        autoencoders"). Sparsity is enforced structurally by keeping only the
+        top cfg.topk_k ReLU'd pre-activations per token, so there is no L1
+        penalty; l1_loss is reported as 0.0 for loss_dict schema
+        compatibility with the other variants (trainer/logging code reads it
+        unconditionally).
+
+        Dead-latent revival uses the paper's own AuxK auxiliary loss, NOT
+        ghost-grads' exp()-based trick used by forward_standard/forward_gated:
+        AuxK reconstructs the current residual (x - sae_out) via the top
+        cfg.topk_aux_k *dead* latents' own (plain, ReLU'd) activations --
+        confirmed against the paper's stated formula, L_aux = ||e - e_hat||^2
+        where e_hat = W_dec @ z using the top-k_aux dead latents, added to
+        the loss with coefficient alpha (paper default 1/32). Ghost-grads'
+        `exp(hidden_pre[dead])` was tried here first and produced inf/NaN
+        during a real training run within a few thousand steps: with no L1
+        penalty bounding hidden_pre's magnitude (unlike forward_standard),
+        exponentiating raw pre-activations overflows readily -- exactly the
+        numerical-stability failure mode the paper's AuxK design (plain,
+        bounded activations, no exponential) avoids.
+        """
+        x = x.to(self.dtype)
+        sae_in = self.hook_sae_in(x - self.b_dec)
+
+        hidden_pre = self.hook_hidden_pre(
+            einops.einsum(sae_in, self.W_enc, "... d_in, d_in d_sae -> ... d_sae") + self.b_enc
+        )
+        hidden_pre_relu = torch.nn.functional.relu(hidden_pre)
+        k = min(self.cfg.topk_k, hidden_pre_relu.shape[-1])
+        topk_vals, topk_idx = torch.topk(hidden_pre_relu, k=k, dim=-1)
+        feature_acts = torch.zeros_like(hidden_pre_relu).scatter(-1, topk_idx, topk_vals)
+        feature_acts = self.hook_hidden_post(feature_acts)
+
+        sae_out = self.hook_sae_out(
+            einops.einsum(feature_acts, self.W_dec, "... d_sae, d_sae d_in -> ... d_in") + self.b_dec
+        )
+
+        mse_loss = (
+            torch.pow((sae_out - x.float()), 2) / (x**2).sum(dim=-1, keepdim=True).sqrt()
+        )
+
+        if len(mse_loss.size()) == 3 and self.training:
+            mse_loss[:, 0, :] = mse_loss[:, 0, :] * self.cfg.mse_cls_coefficient
+        mse_loss = mse_loss.mean()
+
+        aux_loss = torch.tensor(0.0, dtype=self.dtype, device=self.device)
+        if self.training and dead_neuron_mask is not None and dead_neuron_mask.sum() > 0:
+            n_dead = int(dead_neuron_mask.sum().item())
+            k_aux = min(getattr(self.cfg, "topk_aux_k", 512), n_dead)
+            if k_aux > 0:
+                dead_idx = torch.nonzero(dead_neuron_mask, as_tuple=True)[0]
+                dead_pre = hidden_pre_relu[..., dead_idx]
+                aux_vals, aux_local_idx = torch.topk(dead_pre, k=k_aux, dim=-1)
+                aux_idx = dead_idx[aux_local_idx]
+                aux_acts = torch.zeros_like(hidden_pre_relu).scatter(-1, aux_idx, aux_vals)
+                aux_recon = einops.einsum(
+                    aux_acts, self.W_dec, "... d_sae, d_sae d_in -> ... d_in"
+                )
+                residual = (x - sae_out).detach()
+                aux_loss = torch.pow(aux_recon - residual, 2).sum(dim=-1).mean()
+
+        aux_coefficient = getattr(self.cfg, "topk_aux_coefficient", 1.0 / 32)
+        l1_loss = torch.zeros((), dtype=self.dtype, device=self.device)
+        loss = mse_loss + aux_coefficient * aux_loss
+
+        loss_dict = {
+            "mse_loss": mse_loss,
+            "l1_loss": l1_loss,
+            # repurposed key: Top-K's AuxK dead-latent loss, kept here for
+            # loss_dict/logging schema compatibility with the other variants.
+            "mse_loss_ghost_resid": aux_loss,
+            "loss": loss.mean(),
+        }
+
+        return sae_out, feature_acts, loss_dict
+
+    def forward_jumprelu(self, x, dead_neuron_mask=None):
+        """JumpReLU SAE (Rajamanoharan et al. 2024, "Jumping Ahead"). A
+        learned per-unit threshold replaces the fixed zero threshold of
+        forward_standard's ReLU, trained via the straight-through estimator
+        in _JumpReLUSTE. Sparsity is driven by an L0 loss rather than L1
+        (L1 would also shrink the *magnitude* of units already exactly where
+        the threshold wants them). The L0 term uses _StepSTE so its forward
+        value is the true (hard) sparsity count, not a smooth proxy -- only
+        its backward is relaxed, via the same rectangle-kernel STE as the
+        activation itself (confirmed against SAELens's reference `Step`
+        class, which computes L0 as `sum(Step.apply(hidden_pre, threshold,
+        bandwidth))`, not a sigmoid relaxation).
+
+        No ghost-grad-style dead-latent revival is used here (unlike
+        forward_standard/forward_gated): the paper reports JumpReLU SAEs
+        "consistently have few dead features, without the need for
+        resampling," and ghost-grad's revival term exponentiates raw
+        pre-activations (`exp(hidden_pre[dead])`) which are not L1-bounded
+        for this variant (same as Top-K) -- confirmed empirically to
+        overflow to inf/NaN during a real training run.
+        """
+        x = x.to(self.dtype)
+        sae_in = self.hook_sae_in(x - self.b_dec)
+
+        hidden_pre = self.hook_hidden_pre(
+            einops.einsum(sae_in, self.W_enc, "... d_in, d_in d_sae -> ... d_sae") + self.b_enc
+        )
+        hidden_pre_relu = torch.nn.functional.relu(hidden_pre)
+        threshold = torch.exp(self.log_threshold)
+        feature_acts = self.hook_hidden_post(
+            _JumpReLUSTE.apply(hidden_pre_relu, threshold, self.cfg.jumprelu_bandwidth)
+        )
+
+        sae_out = self.hook_sae_out(
+            einops.einsum(feature_acts, self.W_dec, "... d_sae, d_sae d_in -> ... d_in") + self.b_dec
+        )
+
+        mse_loss = (
+            torch.pow((sae_out - x.float()), 2) / (x**2).sum(dim=-1, keepdim=True).sqrt()
+        )
+        mse_loss_ghost_resid = torch.tensor(0.0, dtype=self.dtype, device=self.device)
+
+        if len(mse_loss.size()) == 3 and self.training:
+            mse_loss[:, 0, :] = mse_loss[:, 0, :] * self.cfg.mse_cls_coefficient
+        mse_loss = mse_loss.mean()
+
+        l0_indicator = _StepSTE.apply(hidden_pre_relu, threshold, self.cfg.jumprelu_bandwidth)
+        l0_loss = self.cfg.jumprelu_l0_coefficient * l0_indicator.sum(dim=-1).mean()
+
+        loss = mse_loss + l0_loss + mse_loss_ghost_resid
+
+        loss_dict = {
+            "mse_loss": mse_loss,
+            # repurposed key: JumpReLU's L0 loss, kept here for
+            # loss_dict/logging schema compatibility with the other variants.
+            "l1_loss": l0_loss,
+            "mse_loss_ghost_resid": mse_loss_ghost_resid,
+            "loss": loss.mean(),
+        }
+
+        return sae_out, feature_acts, loss_dict
+
     def forward_clamp(
         self, x, dead_neuron_mask=None, clamp_feat_dim=None, clamp_value=10
     ):
@@ -254,7 +475,111 @@ class SparseAutoencoder(HookedRootModule):
         return sae_out, feature_acts, loss, mse_loss, l1_loss, mse_loss_ghost_resid
 
     def forward_gated(self, x, dead_neuron_mask=None):
-        pass  # TODO: this is not implemented for recent version (only for Hugo Fry's version)
+        """Gated SAE (Rajamanoharan et al. 2024). Shares the encoder direction
+        W_enc/b_enc between two branches: a binary gate pi_gate = W_enc(x-b_dec)+b_gate
+        (using b_enc as b_gate) that decides *which* features fire, and a magnitude
+        branch pi_mag = (W_enc * exp(r_mag))(x-b_dec) + b_mag that decides *how much*.
+        Final features are the gate (hard threshold) times the magnitude (ReLU).
+
+        The gate is a Heaviside step, so it carries no useful gradient on its own;
+        instead the L1 sparsity penalty and an auxiliary frozen-decoder
+        reconstruction loss are both applied to relu(pi_gate), which is what
+        actually trains W_enc/b_enc to make good gating decisions (without the aux
+        loss, the gate sub-network can shrink towards zero to cheat the sparsity
+        penalty without learning anything -- see Sec 3.2 / Fig 3 of the paper).
+        """
+        x = x.to(self.dtype)
+        sae_in = self.hook_sae_in(x - self.b_dec)
+
+        pi_gate = self.hook_hidden_pre(
+            einops.einsum(sae_in, self.W_enc, "... d_in, d_in d_sae -> ... d_sae")
+            + self.b_enc
+        )
+        feature_magnitudes_via_gate = F.relu(pi_gate)
+        feature_acts_gate = (pi_gate > 0).to(self.dtype)
+
+        W_mag = self.W_enc * torch.exp(self.r_mag)
+        pi_mag = (
+            einops.einsum(sae_in, W_mag, "... d_in, d_in d_sae -> ... d_sae")
+            + self.b_mag
+        )
+        feature_acts_mag = F.relu(pi_mag)
+
+        feature_acts = self.hook_hidden_post(feature_acts_gate * feature_acts_mag)
+
+        sae_out = self.hook_sae_out(
+            einops.einsum(
+                feature_acts, self.W_dec, "... d_sae, d_sae d_in -> ... d_in"
+            )
+            + self.b_dec
+        )
+
+        mse_loss = (
+            torch.pow((sae_out - x.float()), 2)
+            / (x**2).sum(dim=-1, keepdim=True).sqrt()
+        )
+
+        # Auxiliary loss: reconstruct via the gate branch's own (differentiable)
+        # magnitudes, through a FROZEN copy of the decoder, so the gate
+        # sub-network gets a real training signal independent of the live
+        # decoder/magnitude branch.
+        via_gate_reconstruction = (
+            einops.einsum(
+                feature_magnitudes_via_gate,
+                self.W_dec.detach(),
+                "... d_sae, d_sae d_in -> ... d_in",
+            )
+            + self.b_dec.detach()
+        )
+        aux_loss = (
+            torch.pow((via_gate_reconstruction - x.float()), 2)
+            / (x**2).sum(dim=-1, keepdim=True).sqrt()
+        )
+
+        mse_loss_ghost_resid = torch.tensor(0.0, dtype=self.dtype, device=self.device)
+        if self.cfg.use_ghost_grads and self.training and dead_neuron_mask is not None and dead_neuron_mask.sum() > 0:
+            residual = x - sae_out
+            l2_norm_residual = torch.norm(residual, dim=-1)
+
+            if len(pi_gate.size()) == 3:
+                feature_acts_dead_neurons_only = torch.exp(pi_gate[:, :, dead_neuron_mask])
+            else:
+                feature_acts_dead_neurons_only = torch.exp(pi_gate[:, dead_neuron_mask])
+            ghost_out = feature_acts_dead_neurons_only @ self.W_dec[dead_neuron_mask, :]
+            l2_norm_ghost_out = torch.norm(ghost_out, dim=-1)
+            norm_scaling_factor = l2_norm_residual / (1e-6 + l2_norm_ghost_out * 2)
+            if len(pi_gate.size()) == 3:
+                ghost_out = ghost_out * norm_scaling_factor[:, :, None].detach()
+            else:
+                ghost_out = ghost_out * norm_scaling_factor[:, None].detach()
+
+            mse_loss_ghost_resid = (
+                torch.pow((ghost_out - residual.detach().float()), 2)
+                / (residual.detach() ** 2).sum(dim=-1, keepdim=True).sqrt()
+            )
+            mse_rescaling_factor = (mse_loss / (mse_loss_ghost_resid + 1e-6)).detach()
+            mse_loss_ghost_resid = mse_rescaling_factor * mse_loss_ghost_resid
+
+        mse_loss_ghost_resid = mse_loss_ghost_resid.mean()
+
+        if len(mse_loss.size()) == 3 and self.training:
+            mse_loss[:, 0, :] = mse_loss[:, 0, :] * self.cfg.mse_cls_coefficient
+        mse_loss = mse_loss.mean()
+        aux_loss = aux_loss.mean()
+
+        sparsity = torch.abs(feature_magnitudes_via_gate).sum(dim=-1).mean(dim=(0,))
+        l1_loss = self.l1_coefficient * sparsity
+        loss = mse_loss + l1_loss + mse_loss_ghost_resid + aux_loss
+
+        loss_dict = {
+            "mse_loss": mse_loss,
+            "l1_loss": l1_loss.mean(),
+            "mse_loss_ghost_resid": mse_loss_ghost_resid,
+            "aux_loss": aux_loss,
+            "loss": loss.mean(),
+        }
+
+        return sae_out, feature_acts, loss_dict
 
     @torch.no_grad()
     def initialize_b_dec(self, activation_store):
@@ -634,7 +959,7 @@ class SparseAutoencoder(HookedRootModule):
             "d_sae, d_sae d_in -> d_sae d_in",
         )
 
-    def save_model(self, path: str):
+    def save_model(self, path: str, training_metadata=None):
         """
         Basic save function for the model. Saves the model's state_dict and the config used to train it.
         """
@@ -644,6 +969,13 @@ class SparseAutoencoder(HookedRootModule):
         os.makedirs(folder, exist_ok=True)
 
         state_dict = {"cfg": self.cfg, "state_dict": self.state_dict()}
+        experiment_metadata = getattr(self.cfg, "experiment_metadata", None)
+        if experiment_metadata is not None:
+            # Duplicate provenance at the checkpoint top level so audits can
+            # inspect experimental factors without depending on cfg internals.
+            state_dict["experiment_metadata"] = experiment_metadata
+        if training_metadata is not None:
+            state_dict["training_metadata"] = training_metadata
 
         if path.endswith(".pt"):
             torch.save(state_dict, path)

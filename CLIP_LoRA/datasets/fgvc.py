@@ -1,57 +1,61 @@
 import os
+import random
+from collections import defaultdict
 
-from .utils import Datum, DatasetBase, read_json, write_json, build_data_loader
+from .utils import Datum, DatasetBase
 
-"""
 template = ['a photo of a {}, a type of aircraft.']
-"""
-template = ['a photo of a {}.']
-class FGVCAircraft(DatasetBase):
 
-    dataset_dir = 'fgvc_aircraft'
+_IMG_EXTS = ('.jpg', '.jpeg', '.png', '.JPEG', '.JPG', '.PNG')
+
+
+def _few_shot_split(all_items, num_shots):
+    by_class = defaultdict(list)
+    for item in all_items:
+        by_class[item.label].append(item)
+
+    train, val, test = [], [], []
+    for items in by_class.values():
+        random.shuffle(items)
+        n_tr = min(num_shots, max(1, len(items) - 1))
+        n_va = min(4, len(items) - n_tr)
+        train.extend(items[:n_tr])
+        val.extend(items[n_tr:n_tr + n_va])
+        remaining = items[n_tr + n_va:]
+        test.extend(remaining if remaining else items)
+
+    if not val:
+        val = train[: max(1, len(train) // 5)]
+    return train, val, test
+
+
+class FGVCAircraft(DatasetBase):
+    """FGVC-Aircraft: 100 aircraft variant classes.
+
+    Expected folder structure:
+        <root>/fgvc_imagefolder/train/<variant_name>/<image>
+    """
+
+    dataset_dir = 'fgvc_imagefolder'
 
     def __init__(self, root, num_shots):
-        
         self.dataset_dir = os.path.join(root, self.dataset_dir)
-        self.image_dir = os.path.join(self.dataset_dir, 'images')
-
         self.template = template
 
-        classnames = []
-        with open(os.path.join(self.dataset_dir, 'variants.txt'), 'r') as f:
-            lines = f.readlines()
-            for line in lines:
-                classnames.append(line.strip())
-        cname2lab = {c: i for i, c in enumerate(classnames)}
+        train_dir = os.path.join(self.dataset_dir, 'train')
+        classes = sorted(d for d in os.listdir(train_dir)
+                         if os.path.isdir(os.path.join(train_dir, d)))
 
-        train = self.read_data(cname2lab, 'images_variant_train.txt')
-        val = self.read_data(cname2lab, 'images_variant_val.txt')
-        test = self.read_data(cname2lab, 'images_variant_test.txt')
-        
-        n_shots_val = min(num_shots, 4)
-        val = self.generate_fewshot_dataset(val, num_shots=n_shots_val)
-        
-        train = self.generate_fewshot_dataset(train, num_shots=num_shots)
-        
+        all_items = []
+        for label, cls in enumerate(classes):
+            cls_dir = os.path.join(train_dir, cls)
+            for fname in sorted(os.listdir(cls_dir)):
+                if fname.lower().endswith(_IMG_EXTS):
+                    all_items.append(Datum(
+                        impath=os.path.join(cls_dir, fname),
+                        label=label,
+                        classname=cls,
+                    ))
+
+        train, val, test = _few_shot_split(all_items, num_shots)
         super().__init__(train_x=train, val=val, test=test)
-    
-    def read_data(self, cname2lab, split_file):
-        filepath = os.path.join(self.dataset_dir, split_file)
-        items = []
-        
-        with open(filepath, 'r') as f:
-            lines = f.readlines()
-            for line in lines:
-                line = line.strip().split(' ')
-                imname = line[0] + '.jpg'
-                classname = ' '.join(line[1:])
-                impath = os.path.join(self.image_dir, imname)
-                label = cname2lab[classname]
-                item = Datum(
-                    impath=impath,
-                    label=label,
-                    classname=classname
-                )
-                items.append(item)
-        
-        return items

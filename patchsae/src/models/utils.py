@@ -6,7 +6,6 @@ import torch
 from transformers import CLIPModel, CLIPProcessor
 
 from src.models.clip import clip
-from src.models.config.maple import get_maple_config
 
 
 def load_clip_model(cfg, model_type: str):
@@ -100,6 +99,20 @@ def get_base_clip(backbone: str) -> tuple[CLIPModel, CLIPProcessor]:
     return model, processor
 
 
+def get_base_backbone(arch: str, model_id: str = None):
+    """Load a base (non-adapted) model + processor for any registered backbone
+    (clip, dino, align, siglip2). Generalizes get_base_clip to the backbones
+    added for masked SAE fine-tuning beyond CLIP; kept separate from
+    get_base_clip so existing CLIP-only call sites are untouched."""
+    from src.sae_training.backbone_registry import get_backbone_spec
+
+    spec = get_backbone_spec(arch)
+    model_id = model_id or spec.default_model_id
+    model = spec.model_cls.from_pretrained(model_id)
+    processor = spec.processor_cls.from_pretrained(model_id)
+    return model, processor
+
+
 def get_adapted_clip(
     cfg,
     model_type: str,
@@ -120,6 +133,11 @@ def get_adapted_clip(
         Tuple of (model, processor)
     """
     if model_type == "maple":
+        # yacs is an optional MaPLe-only dependency.  Importing it at module
+        # import time prevented otherwise independent base/LoRA CLIP utilities
+        # (including rebuttal preflight scripts) from running without yacs.
+        from src.models.config.maple import get_maple_config
+
         cfg = get_maple_config(custom_clip_cfg=config_path)
 
     clip_model = load_clip_model(cfg, model_type)

@@ -1,0 +1,386 @@
+In this paper, we study how adapting a Large Pre-Trained Model~$L$ with an adapter~$A$ affects its interpretability under a mechanistic interpretability tool~$S$.
+We consider combinations of several visual encoders, adapters, and Sparse Auto-Encoders (SAEs) for this study. A \emph{Generic SAE} (G-SAE) $\bar{S}_L$ is trained on activations of~$L$ using a large, pretraining-like corpus (we use ImageNet in this paper). A \emph{Finetuned SAE} (FT-SAE) $S_{\hat{L}}$ is trained on the adapted model~$\hat{L}$ using the target dataset.
+
+\noindent\textbf{Core claim.}
+A sparse autoencoder trained on a base model should not automatically be treated as an
+interpreter for every adapted descendant of that model.
+Our working hypothesis is that the SAE dictionary is partly a model   the activation
+distribution on which it was trained: when adaptation moves the encoder into a new domain,
+the frozen dictionary can become misaligned with the adapted features it is asked to explain.
+We test this hypothesis across four encoders, three adapter families, and 16 benchmarks by
+comparing a generic SAE trained on the base model with a domain-matched SAE retrained on the
+adapted model.
+
+\noindent\textbf{Evaluating the claim.}
+We evaluate the following three SAE configurations using several metrics across a number of encoders, adapters, SAEs and datasets to establish the claim.
+\begin{enumerate}[leftmargin=5mm, nosep]
+    \item {ZS+G-SAE}: $\bar{S}_L(L(I))$: the base model with the generic SAE (reference);
+    \item {FT+G-SAE}: $\bar{S}_L(\hat{L}(I))$: adapted model with the generic SAE. The gap from the previous indicates how far adaptation pushes activations off the base dictionary.
+    \item {FT+FT-SAE}: $S_{\hat{L}}(\hat{L}(I))$: adapted model with the SAE trained on it. The gap from the previous indicates how much the Generic SAE must adapt.
+\end{enumerate}
+
+%\noindent\textbf{SAE variants.}
+%Rather than committing to a single architecture, we sweep ReLU~\citep{cunningham2024sparse}, Top-$k$~\citep{gao2025scaling}, Gated~\citep{rajamanoharan2024improving}, Matryoshka~\citep{bussmann2025matryoshka,zaremba2025msae}, and PatchSAE~\citep{lim2024patchsae} (details in Appendix~\ref{app:sae-variants}). We foreground PatchSAE because it operates on patch tokens, supporting both local analysis (textures, artefacts, acquisition noise) and their global composition into semantic categories; the remaining variants are trained on CLS-token activations.
+
+%\noindent\textbf{Paired training.}
+%The standard protocol trains one SAE on ImageNet activations from the base model and silently reuses it across downstream datasets. We turn that assumption into a testable claim: for every (encoder, adapter, dataset) triple we train both a G-SAE on~~$L$ and an FT-SAE on~~$\hat{L}$.
+
+\noindent\textbf{Diagnostic Metrics.}
+We compute four aspects on each configuration:
+(i)~\emph{Predictive utility}: classification accuracy after replacing activations with their SAE reconstruction~\citep{lim2024patchsae}; a drop for FT+G-SAE relative to the FT-SAE oracle indicates the generic dictionary no longer carries the information the adapted model uses.
+(ii)~\emph{Reconstruction fidelity}: MSE $E_{\mathrm{rec}}=\mathbb{E}[\|\mathrm{SAE}(z)-z\|_2^2]$; high $E_{\mathrm{rec}}$ for FT+G-SAE paired with low $E_{\mathrm{rec}}$ for FT+FT-SAE is a direct signature of dictionary drift.
+(iii)~\emph{Sparsity \& usage}: per-latent activation frequency and mean activation~\citep{cunningham2024sparse,gao2025scaling}; adaptation may induce dead features, diffuse activations, or concentration on a narrower latent set.
+(iv)~\emph{Selectivity}: label entropy over activation-weighted class distributions and monosemanticity~\citep{cunningham2024sparse} (pairwise cosine similarity in CLIP space among top-activating images); low entropy $=$ single-label concentration. Formal definitions of the specific metrics are in Appendix~\ref{app:metrics}.
+
+%\vspace{-5pt}
+\subsection{SAEs under Adapatation: Hypothesis}
+\label{sec:method-problem}
+%\vspace{-5pt}
+%Let $L$ be the visual encoder, $A$ an adapter producing $\hat{L}$, and $S_L$ an SAE trained on $L$'s activations. A common analysis pattern is to apply $S_L$ to $\hat{L}(I)$ and read off concepts, thereby reusing the base dictionary on the adapted model. This is appropriate if adaptation mostly reweights or routes through features already present in the base representation. It becomes questionable if adaptation changes the geometry of the feature space. In that case, $S_L(\hat{L}(I))$ should lose reconstruction fidelity, downstream utility, and concept selectivity relative to an SAE trained directly on $\hat{L}$. The experiments below are designed to distinguish these two regimes.
+
+\input{tables/main_table}
+
+%\vspace{-4pt}
+%\paragraph{One central claim, tested four ways.}
+A generic SAE encodes the statistical structure of its pretraining corpus, not of the adapted network's current representations. After adaptation, the frozen dictionary is structurally misaligned with the network's new feature space. We operationalise this through four axiomatic predictions:
+\begin{enumerate}[leftmargin=5mm,itemsep=-1mm]
+\item
+\textbf{H1} (\emph{downstream utility}): domain-matched SAEs preserve task accuracy better than generic SAEs; the gap grows with domain shift.
+\item
+\textbf{H2} (\emph{dictionary structure}): domain-matched SAEs achieve more efficient reconstruction-sparsity profiles.
+\item
+\textbf{H3} (\emph{inflated monosemanticity}): standard monosemanticity scores over-report quality for generic SAEs under shift; a coverage-aware metric (DAMS) corrects this bias.
+\item
+\textbf{H4} (\emph{scaling with domain distance}): the generic-vs-specific gap scales monotonically with MMD distance from the pretraining distribution.
+\end{enumerate}
+
+%\vspace{-4pt}
+\paragraph{Possible alternative explanation.}
+The main competing explanation is a \emph{hyperparameter mismatch}: perhaps the generic SAE
+uses the wrong dictionary size, sparsity target, or training budget, rather than the wrong
+directions. We address this possibility in three ways.
+First, the dictionary degradation scales with domain distance (H4), which is more consistent with distributional
+shift than with a fixed hyperparameter artefact.
+Second, prompt-based adapters (MaPLe, TAP), which perturb the backbone less directly than
+LoRA, produce larger generic-SAE degradation ($2.4$\,pp vs.~$6.1$\,pp average accuracy gap).
+Third, EuroSAT shows a distinctive specialisation pattern: FT-SAE has $81\%$ dead
+neurons yet improves accuracy by $4.5$\,pp and reduces $L_0$ from $125$ to $15$.
+Together, these patterns suggest that the issue is not only capacity or optimisation, but
+whether the dictionary directions match the adapted representation.
+
+\begin{figure*}[t]
+%    \centering
+\begin{tabular}{c|c}
+    \includegraphics[width=0.48\textwidth]{figures/paired_nmse.png}%
+%    \hfill
+    &
+    \includegraphics[width=0.48\textwidth]{figures/paired_dead.png}\\[4pt]
+\midrule
+    \includegraphics[width=0.48\textwidth]{figures/paired_cossim.png}%
+%    \hfill
+    &
+    \includegraphics[width=0.48\textwidth]{figures/paired_L0.png}
+    \vspace{-4pt}
+\end{tabular}
+    \caption{\textbf{SAE reconstruction diagnostics:} FT-SAE  vs.\ generic base SAE $\bar{S}$ across 15 downstream datasets and four vision encoders.
+    \emph{Top-left:} NMSE --- FT-SAE achieves uniformly lower reconstruction error, with the largest reductions on DTD ($\Delta \approx -0.3$ to $-0.38$).
+    \emph{Top-right:} Dead neuron fraction --- FT-SAE reactivates 20--50\% of dormant latents, especially on far-domain benchmarks; CLIP--EuroSAT anomaly (red) reflects dictionary collapse on satellite imagery.
+    \emph{Bottom-left:} Cosine similarity --- FT-SAE (blue) consistently exceeds G-SAE (grey), with largest gains on far-domain and OOD benchmarks.
+    \emph{Bottom-right:} $L_0$ sparsity --- FT-SAE activates fewer latents while maintaining reconstruction quality; DINO--PathMNIST anomaly ($L_0 > 9000$) reflects near-total activation on far-domain imagery.
+    Green shading indicates $\hat{S}$ improvement; red shading marks anomalous regressions.}
+    \label{fig:sae_diagnostics}
+    \vspace{-12pt}
+\end{figure*}
+
+
+% ------------------------------------------------------------------
+\vspace{-4pt}
+\subsection{Experimental Setup}
+\label{sec:exp:setup}
+\vspace{-4pt}
+
+
+\textbf{Encoders.} CLIP ViT-B/16 \citep{radford2021learning},
+SigLIP ViT-B/16 \citep{zhai2023sigmoid},
+ALIGN ViT-B/16 \citep{jia2021scaling},
+DINOv2 ViT-B/14 \citep{oquab2024dinov2}.
+The first three are language-supervised; DINOv2 is purely self-supervised, letting us
+test whether language grounding affects SAE decomposability.
+
+\textbf{Adaptation.}
+For each encoder: zero-shot (\textbf{ZS}),
+LoRA \citep{hu2022lora} (rank-16, query/value projections, 10 epochs, lr $10^{-4}$),
+MaPLe \citep{khattak2023maple} (multi-modal coupled prompt learning),
+TAP \citep{ding2025tap} ($P{=}16$ prompt tokens).
+LoRA modifies weights directly; MaPLe and TAP leave the backbone frozen.
+This split lets us test whether weight-space adaptation changes the feature geometry more
+than prompt-based adaptation, and therefore whether generic-SAE transfer depends on the
+mechanism used to adapt the model.
+
+
+
+\textbf{Datasets.}
+We use 16 benchmarks ordered by Maximum Mean Discrepancy (MMD) from ImageNet distribution,
+grouped into four tiers:
+\emph{Near-domain} (Caltech101, Pets, Flowers102, StanfordCars, FGVC-Aircraft);
+\emph{Specialized} (DTD, UCF101, CUB, EuroSAT, Food101, SUN397);
+\emph{Far-domain} (PathMNIST, ChestMNIST);
+\emph{OOD robustness} (ImageNet-A, ImageNet-Sketch, ImageNet-C)
+\citep{fei2004caltech,parkhi2012cats,nilsback2008automated,krause2013collecting,
+maji2013fine,cimpoi2013describing,soomro2012ucf101,helber2019eurosat,
+bossard2014food,xiao2010sun,yang2023medmnist,irvin2019chexpert,
+hendrycks2021natural,wang2019learning,hendrycks2019benchmarking}.
+
+\noindent\textbf{SAE variants.}
+We explore different SAEs: ReLU~\citep{cunningham2024sparse}, Top-$k$~\citep{gao2025scaling}, Gated~\citep{rajamanoharan2024improving}, Matryoshka~\citep{bussmann2025matryoshka,zaremba2025msae} (details in Appendix~\ref{app:sae-variants}). Results shown are for Gated SAE; others are given in Appendix.
+
+\textbf{SAE training.}
+For each configuration (encoder, adapter, dataset), we follow the protocol of PatchSAE to train an SAE on patch activations from the penultmate layer of the last block. We use standard expansion factors (ranging from 16 to 64) for SAE's dictionary. We use an Adam learning rate of $3{\times}10^{-4}$ for 50k steps on 1M sampled patch activations.
+
+% ------------------------------------------------------------------
+\vspace{-6pt}
+\subsection{Hypothesis Testing}
+\label{sec:exp:hypotheses}
+\vspace{-5pt}
+
+\paragraph{H1: FT-SAEs recover accuracy that generic SAEs lose.}
+\label{sec:exp:h1}
+
+\textbf{Claim.}
+The generic SAE's accuracy drops when applied to the adapted model
+(LoRA\,+\,$\bar{S}$\,$<$\,LoRA),
+and retraining the SAE closes most of this gap
+
+
+
+
+(LoRA\,+\,$\hat{S}$\,$\approx$\,LoRA).
+The recovery is largest on far-domain benchmarks, where the adapted model's
+feature space diverges most from the pretraining distribution.
+
+%\input{tables/prompt_adapt}
+
+
+FGVC-Aircraft under CLIP LoRA is a representative high-shift case: the generic SAE loses
+$7.9$\,pp relative to the adapted model alone ($38.5$ vs.\,$46.4$), while the FT-SAE
+recovers $6.3$\,pp of this gap ($44.8$), leaving a residual $1.6$\,pp loss attributable to
+SAE compression or remaining mismatch.
+On Caltech101, which is much closer to ImageNet, the same comparison gives a smaller
+$2.9$\,pp loss and $2.4$\,pp recovery.
+
+This ordering is the qualitative pattern predicted by dictionary--domain mismatch: the
+benefit of retraining grows as the target distribution moves away from the SAE's training
+distribution.
+
+
+
+% Table~\ref{tab:main_accuracy} shows classification accuracy for all
+% (encoder, adapter, SAE) combinations across 15 benchmarks.
+% Three findings are visible directly from the numbers.
+
+\textbf{Finding 1 — Generic SAEs degrade after adaptation.}
+Applying the generic SAE to the LoRA-adapted model
+(LoRA\,+\,$\bar{S}$) loses $2$--$8$ pp relative to LoRA alone on every benchmark.
+The loss is smallest near ImageNet (Caltech101: $-2.9$\,pp for CLIP)
+and largest on fine-grained or domain-shifted data
+(FGVC-Aircraft: $-7.9$\,pp; PathMNIST: $-6.4$\,pp).
+
+
+ 
+\textbf{Finding 2 — FT-SAEs recover the gap, scaling with domain shift.}
+LoRA\,+\,$\hat{S}$ recovers an average of $\mathbf{3.9}$\,pp over LoRA\,+\,$\bar{S}$
+across all 15 datasets for CLIP.
+
+
+
+The recovery is largest precisely where the generic SAE fails most:
+EuroSAT $+4.5$\,pp, FGVC-Aircraft $+6.3$\,pp, PathMNIS $+3.5$\,pp.
+On Caltech101 --- nearest to ImageNet --- recovery is only $+2.4$\,pp,
+supporting the view that both failure and recovery are linked to domain distance.
+
+\textbf{Finding 3 — The pattern holds across all four backbones.}
+SigLIP, DINO, and ALIGN show the same ordering
+(LoRA\,+\,$\bar{S}$\,$<$\,LoRA\,+\,$\hat{S}$\,$\leq$\,LoRA) on every benchmark,
+with per-backbone average recoveries of $3.9$, $3.5$, and $3.6$\,pp.
+This cross-architecture consistency makes model-specific artifacts less likely.
+
+%\input{tables/main_table_delta}
+\vspace{-5pt}
+\paragraph{H2: FT-SAES achieve a more efficient reconstruction-sparsity profile.}
+\label{sec:exp:h2}
+
+\textbf{Claim.}
+A domain-matched SAE encodes the adapted model's features with
+fewer active neurons ($L_0$), fewer dead neurons, and higher reconstruction fidelity (CosSim, NMSE)
+than the generic SAE applied to the same adapted activations.
+The improvements are largest on the same far-domain benchmarks where H1's accuracy gap is largest.
+
+% \input{tables/sae_stats}
+
+
+
+This matters because H1 alone could be explained by a task-specific effect: perhaps the
+FT-SAE improves classification without being a better representation of the adapted
+features. H2 tests a stronger requirement. If the FT-SAE is truly better matched to
+the adapted model, it should also reconstruct held-out activations more efficiently.
+DTD illustrates this point: the generic SAE has NMSE $0.762$, while the FT-SAE has
+NMSE $0.415$, a $46\%$ reduction in reconstruction error on held-out data.
+This makes a pure task-overfitting explanation less plausible and supports the interpretation
+that the FT-SAE has learned directions better aligned with the adapted feature manifold.
+Figures~\ref{fig:paired_cossim}, \ref{fig:paired_dead}, \ref{fig:paired_L0} and \ref{fig:paired_nmse} provide four complementary lines of evidence
+for the same conclusion.
+
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\columnwidth]{figures/tsne_comparison_eurosat.pdf}
+
+\ \\
+
+\includegraphics[width=\columnwidth]{figures/tsne_comparison_pathmnist.pdf}
+
+%\vspace{0.9em}
+%\vspace{0.4em}
+\caption{\textbf{t-SNE visualisations of SAE latent activations: G-SAE vs FT-SAE for datasets EUROSAT(top) and PathMNIST(Bottom)}
+Each panel shows patch-level SAE activations projected to 2D via t-SNE, coloured by class label.
+Domain-matched SAEs produce more compact, class-separable clusters, especially on far-domain benchmarks,
+consistent with the lower label entropy and higher downstream accuracy in
+Table~\ref{fig:label_entropy} and Table~\ref{tab:main_accuracy_abs}.}
+\label{fig:tsne}
+\vspace{-10pt}
+\end{figure}
+
+
+\textbf{Finding 1 — FT-SAES are sparser.}
+Applying the generic SAE to LoRA-adapted features forces the model to activate
+many neurons just to reconstruct the shifted activations.
+
+
+
+Retraining eliminates this waste:
+for CLIP, the near-domain average $L_0$ drops from $47$ to $32$ ($-32\%$);
+for EuroSAT it drops from $125$ to $15$ ($-88\%$).
+Figure~\ref{fig:l0_sparsity} shows this pattern across all four backbones.
+
+
+
+
+The notable exception is DINO on PathMNIST where $L_0$ \emph{increases}
+($9{,}185 \to 9{,}676$) and CosSim collapses to $0.013$:
+DINOv2's self-supervised features are not sparse-decomposable on medical imagery
+(see Sec.~\ref{sec:obs:dino} for discussion).
+
+\textbf{Finding 2 — Dead-neuron fraction mostly decreases, with one instructive exception.}
+FT-SAE reduce dead neurons by $31\%$ on average in near-domain settings
+(Fig.~\ref{fig:dead_fraction}).
+The exception is EuroSAT, where the dead fraction \emph{rises} from $0.16$ to $0.81$.
+Combined with an $L_0$ drop from $125$ to $15$ and a CosSim gain of $+0.105$,
+this suggests that the FT-SAE creates a \emph{hyper-specialised} dictionary:
+a small number of satellite-specific neurons carry all the signal,
+while the rest remain dormant.
+In this setting, a high dead-neuron fraction is better interpreted alongside sparsity and
+reconstruction fidelity, rather than as an isolated failure signal.
+
+\textbf{Finding 3 — Reconstruction fidelity improves except under one dissociation.}
+FT-SAES improve average CosSim by $+0.022$ across all backbones and datasets
+(Fig.~\ref{fig:paired_cossim}).
+DTD stands out: generic SAE NMSE is $0.762$; FT-SAEs NMSE is $0.415$,
+a 46\% reduction, indicating that texture domains are especially poorly served
+by an ImageNet-pretrained dictionary.
+One notable inversion is CLIP PathMNIST where CosSim \emph{drops}
+($0.882 \to 0.730$) with the FT-SAE, yet accuracy rises as discussed in \ref{sec:exp:h1}
+
+This dissociation suggests that cosine similarity with the \emph{base} feature space
+is not a reliable proxy for downstream utility under large domain shift ---
+the FT-SAE discovers new feature directions that are orthogonal to the
+pretraining ones yet more useful for the task.
+We return to this in Sec.~\ref{sec:obs:cossim}.
+
+
+Each panel shows patch-level SAE activations projected to 2D via t-SNE, coloured by class label.
+Domain-matched SAEs produce more compact, class-separable clusters, especially on far-domain benchmarks
+(EuroSAT, PathMNIST, ChestMNIST), consistent with the lower label entropy and higher downstream accuracy in
+Table~\ref{fig:label_entropy} and Table~\ref{tab:main_accuracy_abs}.
+UCF-101 and DTD show smaller but consistent improvements.
+\label{fig:tsne}
+
+\vspace{-4pt}
+\paragraph{H3: Standard monosemanticity metrics overestimate interpretability under shift.}
+\label{sec:exp:h3}
+
+\vspace{-4pt}
+\subparagraph{Domain-Aware Monosemanticity Score.}
+A generic SAE can appear spuriously monosemantic on a shifted distribution because
+unfamiliar inputs may be consistently mapped to a small set of generic
+``catch-all'' features. The standard monosemanticity score $\mathrm{MS}_h$
+can therefore be inflated: a latent may fire on a semantically coherent subset,
+or even broadly across the target domain, without carrying useful
+class-discriminative information. This failure is especially likely when the
+target-domain data are poorly represented by the SAE dictionary.
+\vspace{-4pt}
+\begin{equation}
+\label{eq:dams}
+\mathrm{DAMS}
+=
+\mathrm{EC}
+\left[
+\alpha\,\mathrm{CSS}_{\mathrm{norm}}
++
+(1-\alpha)\,\mathrm{FSS}
+\right],
+\qquad
+\mathrm{CSS}_{\mathrm{norm}}
+=
+\frac{\mathrm{CSS}_{\mathrm{raw}}}
+{\mathrm{CSS}_{\mathrm{raw}}+\kappa}.
+\end{equation}
+
+
+
+Here, $\mathrm{EC}$ measures effective representation coverage and penalises
+poorly fitting SAEs whose activations are broad or uninformative.
+$\mathrm{CSS}_{\mathrm{raw}}$ measures class-distribution separability in SAE
+activation space, while $\mathrm{FSS}$ measures feature-level specificity within
+the target label distribution. The parameter $\alpha\in[0,1]$ controls the
+trade-off between distribution-level separability and feature-level specificity,
+and $\kappa>0$ controls the saturation of the normalized CSS term.
+
+Thus, DAMS is high only when an SAE both preserves useful target-domain
+representation structure and produces sparse features that are class-specific.
+A generic SAE on a far-domain benchmark may obtain high $\mathrm{MS}_h$ due to
+broad, non-discriminative firing, but it should obtain lower DAMS because such
+features have weak effective coverage and poor class separability.
+
+
+
+\input{tables/size_ablation}
+
+\vspace{-4pt}
+\paragraph{H4: The interpretability gap scales with domain shift.}
+\label{sec:exp:h4}
+
+\textbf{Claim.}
+The gap between generic-SAE and FT-SAE quality (on all H1--H3 metrics) grows
+monotonically with the MMD distance between the pretraining and target distributions,
+providing a practical deployment criterion: the further the target domain,
+the more necessary it is to retrain the SAE.
+
+
+
+
+
+H4 is important because it is a prediction about structure, not just a post-hoc explanation
+of individual failures. The dictionary-mismatch hypothesis predicts that degradation should
+increase with domain distance rather than appear as an arbitrary collection of dataset-specific
+effects. This prediction would be weakened if near-domain benchmarks showed large degradation
+while far-domain benchmarks showed
+
+
+
+little or none.
+Table~\ref{tab:main_accuracy_abs} and Fig.~\ref{fig:l0_sparsity} already show this ordering
+holds across all 15 benchmarks; the line plot in Fig.~\ref{fig:gap_vs_distance} makes
+the monotone relationship explicit.
+
+The practical implication is direct: given a new target domain, a researcher can compute
+its MMD distance from ImageNet and use \ref{tab:combined_ms_dams} as a first estimate of whether generic-SAE degradation is likely to justify retraining before running the full comparison.

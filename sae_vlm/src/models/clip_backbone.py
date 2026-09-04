@@ -3,7 +3,11 @@
 from typing import List, Optional
 import torch
 from PIL import Image
-from transformers import CLIPModel, CLIPProcessor
+from transformers import AutoProcessor, CLIPModel, CLIPProcessor, SiglipModel
+try:
+    from transformers import Siglip2Model
+except ImportError:  # older transformers versions don't have Siglip2Model yet
+    Siglip2Model = None
 
 from .base import BackboneBase
 
@@ -19,8 +23,18 @@ class CLIPBackbone(BackboneBase):
 
     def load(self) -> "CLIPBackbone":
         mid = self.model_cfg["model_id"]
-        self.processor = CLIPProcessor.from_pretrained(mid)
-        self.model = CLIPModel.from_pretrained(mid).eval().to(self.device)
+        loader = self.model_cfg.get("loader", "clip").lower()
+        trust_remote_code = self.model_cfg.get("trust_remote_code", False)
+
+        if loader == "siglip2":
+            self.processor = AutoProcessor.from_pretrained(mid, trust_remote_code=trust_remote_code)
+            self.model = Siglip2Model.from_pretrained(mid, trust_remote_code=trust_remote_code).eval().to(self.device)
+        elif loader == "siglip":
+            self.processor = AutoProcessor.from_pretrained(mid, trust_remote_code=trust_remote_code)
+            self.model = SiglipModel.from_pretrained(mid, trust_remote_code=trust_remote_code).eval().to(self.device)
+        else:
+            self.processor = CLIPProcessor.from_pretrained(mid, trust_remote_code=trust_remote_code)
+            self.model = CLIPModel.from_pretrained(mid, trust_remote_code=trust_remote_code).eval().to(self.device)
         return self
 
     def get_activations(

@@ -1,0 +1,276 @@
+We evaluate our analysis framework across a systematic grid of models, adaptation methods, and datasets.
+All experiments use the same SAE architecture and training protocol to ensure comparability.
+
+% ------------------------------------------------------------------
+\subsection{Experimental Setup}
+\label{sec:exp:setup}
+
+\textbf{Models.}
+We study the visual encoders of two VLM families:
+(1)~CLIP ViT-B/16~\cite{radford2021learning}, trained with a contrastive softmax loss on 400M image-text pairs from WebImageText;
+(2)~SigLIP ViT-B/16~\cite{zhai2023sigmoid}, trained with a pairwise sigmoid loss on WebLI.
+Both use a 12-layer ViT-B/16 backbone with $d{=}768$ and produce $N{=}196$ patch tokens for $224{\times}224$ images.
+
+\textbf{Adaptation methods.}
+For each model we consider three adaptation configurations:
+\begin{itemize}
+    \item \textbf{Base}: the frozen pre-trained model (no adaptation).
+    \item \textbf{LoRA}: Low-Rank Adaptation with rank $r{=}16$ applied to all query and value projections, trained for 10 epochs with learning rate $10^{-4}$ and cosine decay.
+    \item \textbf{MaPLE}: Multi-modal Prompt Learning that jointly learns coupled vision-language prompts across multiple transformer stages to improve CLIP alignment on downstream tasks.
+    \item \textbf{TAP}: Training-time Adaptation with Prompts using $P{=}16$ learnable tokens, trained under identical schedule and budget as LoRA for fair comparison.
+\end{itemize}
+
+
+\textbf{Datasets.}
+We select six image classification benchmarks spanning increasing distribution shift relative to the VLM pre-training data:
+\begin{enumerate}
+    \item \textbf{ImageNet}~\cite{deng2009imagenet}: 1000-class general object recognition (in-distribution).
+    \item \textbf{Caltech-101}~\cite{fei2004caltech}: 101-class object recognition with more domain-specific categories (moderate shift).
+    \item \textbf{FGVC-Aircraft}~\cite{maji2013fine}: 100-class fine-grained aircraft recognition (moderate shift: fine-grained, not object-centric).
+    \item \textbf{EuroSAT}~\cite{helber2019eurosat}: 10-class satellite land-use imagery (strong shift: remote sensing domain).
+    \item \textbf{DTD}~\cite{cimpoi2013describing}: 47 describable texture categories (strong shift: texture-centric, not object-centric).
+    \item \textbf{MedMNIST}~\cite{silva2021medmnist}: 10-class medical image classification (strong shift: domain-specific).
+\end{enumerate}
+
+
+This progression from in-distribution to out-of-distribution data lets us study how the internal effects of adaptation vary with distribution gap.
+
+\textbf{SAE training.}
+For each (model, adaptation, dataset) combination, we train a separate SAE on
+patch-token activations from transformer block $\ell{=}10$ (Python index $-2$).
+All controlled comparisons use input width $d{=}768$, dictionary size
+$M{=}49{,}152$ ($64\times$ expansion), sparsity coefficient
+$\lambda{=}8\times10^{-5}$, Adam with learning rate $4\times10^{-4}$, batch
+size 16, and a 100,000-image training exposure. Because the hook returns all
+197 ViT tokens per image, this corresponds to 19.7 million activation vectors.
+The ImageNet G-SAE used to
+initialize masked fine-tuning has the same architecture and hook location.
+We report images consumed because the implementation's legacy
+\texttt{n\_training\_tokens} counter increments by the image-batch dimension,
+not by the number of patch-token activation vectors. We additionally report
+the derived activation-vector exposure in checkpoint metadata.
+
+\textbf{Evaluation protocol.}
+
+\paragraph{Protected-capacity ablation.}
+To measure the stability--plasticity trade-off of masked SAE fine-tuning, we
+vary the fraction $p$ of ImageNet-active dictionary elements whose encoder
+vectors, encoder biases, and decoder vectors are held fixed during target-domain
+training. We evaluate $p\in\{0,0.1,0.2,0.4,0.6,0.8,1.0\}$; $p=0$ is ordinary
+full-dictionary fine-tuning and $p=1$ is an exact frozen-ImageNet-SAE control.
+Protected elements are selected once, before
+fine-tuning, by mean absolute activation on a fixed ImageNet reference sample.
+All fractions use the same layer ($\ell=10$, indexed as $-2$), 49,152-element
+dictionary, optimizer, learning-rate schedule, 100,000-image exposure, data
+ordering, and evaluation examples. We repeat SAE training with three seeds and
+report means with two-sided 95\% Student-$t$ confidence intervals across seeds.
+For each target-domain LoRA model, every SAE is evaluated both on the target
+test set (plasticity) and on the same seeded 5,000-image ImageNet subset
+(retention). We additionally report reconstruction cosine similarity, fraction
+of variance explained, $L_0$, and dead-feature fraction. The implementation
+restores protected parameters after both the optimizer step and decoder
+renormalization, ensuring they remain bitwise unchanged throughout training;
+at $p=1$, the shared decoder bias is also restored.
+
+The ablation tables are generated directly from the tidy per-run results using
+\texttt{tasks/summarize\_masking\_ablation.py}. This avoids manually transcribed
+values; the generated tables are included only after all pre-registered cells
+have completed.
+
+
+% ------------------------------------------------------------------
+\subsection{Main Results: Classification Accuracy}
+\label{sec:exp:accuracy}
+
+Table~\ref{tab:main_accuracy} presents classification accuracy across all configurations.
+LoRA, MaPLE and TAP improve over the Base model on every dataset, confirming that parameter-efficient adaptation is effective across distribution shifts.
+
+Two patterns emerge.
+First, the accuracy gain from adaptation is \emph{largest} on the most out-of-distribution datasets (EuroSAT: +43.1\,pp for CLIP-LoRA; DTD: +21.1\,pp), and smallest on ImageNet (+3.8\,pp)---consistent with the intuition that datasets closer to the pre-training distribution benefit less from additional adaptation.
+Second, LoRA consistently outperforms TAP by a small margin (1--3\,pp), despite modifying fundamentally different parts of the computation.
+
+These accuracy results set the stage for the central question of this paper: do these two methods achieve their gains through the same internal mechanism?
+
+
+
+We highlight three key findings:
+
+\textbf{Finding 1: Adaptation increases sparsity and monosemanticity over certain features}
+
+
+\textbf{Finding 2: LoRA sharpens more aggressively than TAP.}
+LoRA consistently produces sparser and more monosemantic features than TAP---by 2--3 points on $\mathcal{S}$ and 3--8 points on $\mathcal{M}$ depending on the dataset.
+However, LoRA also exhibits higher feature drift $\mathcal{D}_\text{feat}$, indicating that it modifies the feature dictionary more substantially.
+In contrast, TAP achieves its gains while preserving a feature dictionary closer to the base model.
+This suggests a fundamental mechanistic difference: \emph{LoRA reshapes features; TAP steers them.}
+
+\textbf{Finding 3: Sharpening scales with distribution shift.}
+The increase in both $\mathcal{S}$ and $\mathcal{M}$ is largest for the most out-of-distribution datasets (EuroSAT, DTD) and smallest for ImageNet.
+This mirrors the accuracy gains in Table~\ref{tab:main_accuracy}, and we formalize this relationship below.
+```
+This is the code block that represents the suggested code change:
+```tex
+% ------------------------------------------------------------------
+\subsection{CLIP-based Results}
+\label{sec:results:clip}
+
+\begin{table*}[!htbp]
+\centering
+\caption{\textbf{Classification performance across backbones and SAE configurations.}}
+\label{tab:classification}
+
+% ── CLIP backbone ──
+\textbf{CLIP Backbone} \\[4pt]
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Method} & \txtSPL{Caltech101} & \txtSPL{DTD} & \txtSPL{FGVC} & \txtSPL{UCF101} & \txtSPL{EuroSAT} & \txtSPL{MedMNIST} \\
+\midrule
+Zero-shot CLIP        & 92.25 & 43.6 & 24.7 & 64.23 & 42.04 & 19.80 \\
+LoRA FT CLIP          & 96.23 & 74.32 & 54.7 & 85.41 & 91.05 & 91.89 \\
+MaPLe                 & 96.12 & 56.44 & 25.45 & 80.40 & 80.93 & 87.65\\
+TAP                   & 95.5 & 68.0 & 36.5 & 73.2 & 86.22 & 90.9\\
+\midrule
+Zero-shot + Base SAE  & 81.33 & 38.94 & 24.83 & 28.16 & 27.67 & 34.55 \\
+LoRA + Base SAE       & 83.03 & 69.07 & 34.98 & 42.55 & 41.55 & 46.70 \\
+LoRA + LoRA SAE       & \bf 88.05 & \bf 53.2 & \bf 46.5 & \bf 78.2 & \bf 83.71 & \bf 90.75 \\
+MaPLe + Base SAE      & 87.15 & 52.89 & 20.16 & 62.18 & 46.4 & 60.2\\
+MaPLe + MaPLe SAE     & \bf 87.25 & \bf 53.21 & 24.02 & \bf 65.67 & \bf 64.18 & \bf 87.1\\
+TAP + Base SAE        & 75.0 & 39.49 & 18.95 & 41.33 & 22.12 & 11.3\\
+TAP + TAP SAE         & \bf 81.46 & \bf 44.75 & 20.5 & \bf 46.4 & \bf 54.13 & \bf 64.0\\
+\bottomrule
+\end{tabular}%
+}
+
+\vspace{4pt}
+% ── SigLIP backbone ──
+\textbf{SigLIP Backbone} \\[4pt]
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Method} & \txtSPL{Caltech101} & \txtSPL{DTD} & \txtSPL{FGVC} & \txtSPL{UCF101} & \txtSPL{EuroSAT} & \txtSPL{MedMNIST} \\
+\midrule
+Zero-shot SigLIP      & 97.0& 63.24& 28.11& 70.02& 41.41& 16.11\\
+LoRA FT SigLIP        & 97.2& 69.21& 31.86& 76.22& 82.74& 66.96\\
+MaPLe                 & 86.3& -- & -- & -- & -- & \\
+TAP                   & 93.2& -- & -- & -- & -- & -- \\
+\midrule
+Zero-shot + Base SAE  & 63.2& 54.2& 23.67& 56.5& 46.3& 54.67\\
+LoRA + Base SAE       & -- & -- & -- & -- & & -- \\
+LoRA + LoRA SAE       & \bf 92.4 & \bf 69.91 & \bf 31.2 & \bf 75.49 & \bf 68.5& \bf67.1\\
+MaPLe + Base SAE      & -- & & -- & -- & & \\
+MaPLe + MaPLe SAE     & -- & & & -- & & -- \\
+TAP + Base SAE        & -- & -- & -- & -- & -- & -- \\
+TAP + TAP SAE         & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}%
+}
+
+\end{table*}
+
+\FloatBarrier
+
+\begin{table*}[!htbp]
+\centering
+\caption{\textbf{SAE metrics across backbones and SAE configurations.}}
+\label{tab:sae_metrics}
+
+% ── CLIP backbone ──
+\textbf{CLIP Backbone} \\[4pt]
+\resizebox{\textwidth}{!}{%
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llcccccc}
+\toprule
+\textbf{Metric} & \textbf{SAE} & \txtSPL{Caltech101} & \txtSPL{DTD} & \txtSPL{FGVC} & \txtSPL{UCF101} & \txtSPL{EuroSAT} & \txtSPL{MedMNIST} \\
+\midrule
+\multirow{Recon.\ Error}
+  & Base  & & -- & -- & -- & & \\
+  & LoRA  & & -- & -- & -- & & \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\midrule
+\multirow{Sparsity}
+  & Base  & -- & -- & -- & -- & -- & -- \\
+  & LoRA  & -- & -- & -- & -- & -- & -- \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\midrule
+\multirow{Label Entropy}
+  & Base  & -- & -- & -- & -- & -- & -- \\
+  & LoRA  & -- & -- & -- & -- & -- & -- \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\midrule
+\multirow{Overlap (Global)}
+  & Base  & -- & -- & -- & -- & -- & -- \\
+  & LoRA  & -- & -- & -- & -- & -- & -- \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\midrule
+\multirow{Overlap (Local)}
+  & Base  & -- & -- & -- & -- & -- & -- \\
+  & LoRA  & -- & -- & -- & -- & -- & -- \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\midrule
+\multirow{Monosemanticity}
+  & Base  &  0.657& 0.52& 0.743& 0.687& 0.75& 0.84 \\
+  & LoRA  & 0.61& 0.54& 0.76& 0.69& 0.756& 0.88\\
+  & MaPLe &  0.64& 0.68& 0.72& 0.7& 0.86& 0.867 \\
+  & TAP   &  & -- & -- & -- & -- & 0.85 \\
+\bottomrule
+\end{tabular}%
+}
+
+\vspace{12pt}
+
+% ── SigLIP backbone ──
+\textbf{SigLIP Backbone} \\[4pt]
+\resizebox{\textwidth}{!}{%
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llcccccc}
+\toprule
+\textbf{Metric} & \textbf{SAE} & \txtSPL{Caltech101} & \txtSPL{DTD} & \txtSPL{FGVC} & \txtSPL{UCF101} & \txtSPL{EuroSAT} & \txtSPL{MedMNIST} \\
+\midrule
+\multirow{Recon.\ Error}
+  & Base  & -- & -- & -- & -- & -- & -- \\
+  & LoRA  & -- & -- & -- & -- & -- & -- \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\midrule
+\multirow{Sparsity}
+  & Base  & -- & -- & -- & -- & -- & -- \\
+  & LoRA  & -- & -- & -- & -- & -- & -- \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\midrule
+\multirow{Label Entropy}
+  & Base  & -- & -- & -- & -- & -- & -- \\
+  & LoRA  & -- & -- & -- & -- & -- & -- \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\midrule
+\multirow{Overlap (Global)}
+  & Base  & -- & -- & -- & -- & -- & -- \\
+  & LoRA  & -- & -- & -- & -- & -- & -- \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\midrule
+\multirow{Overlap (Local)}
+  & Base  & -- & -- & -- & -- & -- & -- \\
+  & LoRA  & -- & -- & -- & -- & -- & -- \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\midrule
+\multirow{Monosemanticity}
+  & Base  & -- & -- & -- & -- & -- & -- \\
+  & LoRA  & -- & -- & -- & -- & -- & -- \\
+  & MaPLe & -- & -- & -- & -- & -- & -- \\
+  & TAP   & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}%
+}
+
+\end{table*}
+
+\FloatBarrier

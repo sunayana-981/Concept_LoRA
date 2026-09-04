@@ -1,0 +1,28 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{DAMS under a coarsened label taxonomy.} Coarse groupings were declared
+before computing anything (EuroSAT $10\!\rightarrow\!4$: agricultural, vegetation, water,
+built-up; PathMNIST $9\!\rightarrow\!5$: tumour epithelium, normal epithelium,
+stroma/connective, immune, non-tissue) and applied to the same precomputed activations,
+so only the grouping changes. The \emph{direction} of the claim survives in $4/4$ cells:
+DAMS's ranking of $\hat{S}$ over $\bar{S}$ is not an artefact of the particular taxonomy.
+The \emph{magnitude} of the gap shrinks substantially, by $75\%$ on EuroSAT and $50\%$ on
+PathMNIST, so DAMS gap size --- as distinct from gap sign --- should be read as
+taxonomy-sensitive.}
+\label{tab:dams_coarsening}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{llcccc}
+\toprule
+\textbf{Dataset} & \textbf{Granularity} & \textbf{\# classes} & \textbf{DAMS $\hat{S}$} & \textbf{DAMS $\bar{S}$} & \textbf{Gap} \\
+\midrule
+\multirow{2}{*}{eurosat}
+ & fine   & 10 & 0.773 & 0.700 & $+0.073$ \\
+ & coarse & \phantom{0}4 & 0.785 & 0.767 & $+0.018$ \\
+\midrule
+\multirow{2}{*}{pathmnist}
+ & fine   & \phantom{0}9 & 0.889 & 0.733 & $+0.157$ \\
+ & coarse & \phantom{0}5 & 0.884 & 0.806 & $+0.078$ \\
+\bottomrule
+\end{tabular}
+\end{table}

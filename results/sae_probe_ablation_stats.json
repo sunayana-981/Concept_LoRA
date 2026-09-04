@@ -1,0 +1,34 @@
+{
+  "pre_registered": [
+    {
+      "comparison": "A2_dora_sae_vs_A0_no_sae",
+      "n_tasks": 70,
+      "mean_a": 0.956692033929412,
+      "mean_b": 0.9484484039786212,
+      "statistic": 823.0,
+      "pvalue": 0.014088826850983277,
+      "pvalue_holm": 0.028177653701966555,
+      "significant_at_0.05": true
+    },
+    {
+      "comparison": "A2_dora_sae_vs_A1_generic_sae",
+      "n_tasks": 70,
+      "mean_a": 0.956692033929412,
+      "mean_b": 0.9422498941335408,
+      "statistic": 628.0,
+      "pvalue": 0.00032294148864889005,
+      "pvalue_holm": 0.0009688244659466702,
+      "significant_at_0.05": true
+    },
+    {
+      "comparison": "A2_dora_sae_vs_A4_dense_ae",
+      "n_tasks": 70,
+      "mean_a": 0.956692033929412,
+      "mean_b": 0.9508866420331334,
+      "statistic": 1127.0,
+      "pvalue": 0.49908693534969073,
+      "pvalue_holm": 0.49908693534969073,
+      "significant_at_0.05": false
+    }
+  ]
+}

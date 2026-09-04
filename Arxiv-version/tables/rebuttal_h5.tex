@@ -1,0 +1,31 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{Necessity of a dictionary's top latents tracks domain distance;
+sufficiency does not.} \emph{Necessity gap}: the accuracy drop from zeroing a class's
+top-$k$ latents minus the drop from zeroing $k$ random non-top latents, for $\hat{S}$
+minus $\bar{S}$. \emph{Sufficiency gap}: AUC over an amplification sweep
+($\alpha\in\{2,5,10\}$, $k=10$) measuring how often amplifying a target class's latents
+on other-class images flips the prediction to that class. Necessity is rank-perfect
+against $\mathrm{MMD}^2$ at both $k$ --- near the pretraining distribution the generic
+dictionary's latents are as load-bearing as the finetuned one's, and by PathMNIST they
+barely matter to the model's own predictions. Sufficiency shows no reliable trend
+($r=0.26$, $p=0.74$); the two should not be collapsed into a single steerability number.
+Per-class tests ($n=6$ per dataset) are underpowered by design --- the informative unit
+here is the dataset-level rank correlation.}
+\label{tab:h5_steering}
+\setlength{\tabcolsep}{6pt}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Dataset (tier)} & $\mathbf{MMD^2}$ & \textbf{Necessity ($k{=}5$)} & \textbf{Necessity ($k{=}25$)} & \textbf{Sufficiency (AUC)} \\
+\midrule
+caltech101 (near) & 0.028 & $-0.036$ & $-0.026$ & $-0.011$ \\
+dtd (mid)         & 0.090 & $-0.014$ & $+0.008$ & $+0.004$ \\
+eurosat (mid)     & 0.291 & $\phantom{-}0.000$ & $+0.047$ & $+0.030$ \\
+pathmnist (far)   & 0.423 & $\bf +0.104$ & $\bf +0.167$ & $-0.006$ \\
+\midrule
+Pearson $r$ ($p$)   & & 0.90 (0.10) & 0.95 (0.05) & 0.26 (0.74) \\
+Spearman $\rho$ ($p$) & & \bf 1.00 (0.00) & \bf 1.00 (0.00) & 0.40 (0.60) \\
+\bottomrule
+\end{tabular}
+\end{table}

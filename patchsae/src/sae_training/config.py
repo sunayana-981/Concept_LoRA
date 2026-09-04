@@ -49,7 +49,12 @@ class ViTSAERunnerConfig:
     d_in: int = 768
 
     # Activation Store Parameters
+    # Historical name retained for checkpoint compatibility. ViT trainers
+    # increment this counter by the leading image-batch dimension, so its unit
+    # is training examples/images rather than patch activation tokens.
     total_training_tokens: int = 2_000_000
+    training_examples: Optional[int] = None
+    activation_vectors_per_example: Optional[int] = None
     n_batches_in_store: int = 32
     store_size: Optional[int] = None
     max_batch_size_for_vit_forward_pass: int = 1024
@@ -65,6 +70,33 @@ class ViTSAERunnerConfig:
     expansion_factor: int = 4
     from_pretrained_path: Optional[str] = None
     gated_sae: bool = False
+
+    # Top-K SAE (Gao et al. 2024, "Scaling and evaluating sparse
+    # autoencoders"): keep only the top-k pre-activations per token instead of
+    # thresholding at zero; sparsity is enforced structurally so no L1 penalty
+    # is used. Dead-latent revival uses the paper's AuxK auxiliary loss
+    # (reconstruct the residual via the top topk_aux_k dead latents' own
+    # activations), not ghost-grads -- see forward_topk's docstring.
+    topk_sae: bool = False
+    topk_k: int = 32
+    topk_aux_k: int = 512
+    topk_aux_coefficient: float = 1.0 / 32
+
+    # JumpReLU SAE (Rajamanoharan et al. 2024, "Jumping Ahead"): a learned
+    # per-unit threshold with a straight-through gradient estimator, trained
+    # against an L0 penalty (hard count in the forward pass, STE-relaxed in
+    # the backward pass -- see forward_jumprelu's docstring) instead of L1.
+    jumprelu_sae: bool = False
+    jumprelu_bandwidth: float = 0.001
+    jumprelu_init_threshold: float = 0.001
+    jumprelu_l0_coefficient: float = 1e-3
+
+    # Matryoshka SAE (Bussmann et al. 2024): nested dictionary prefixes share
+    # one encoder/decoder; the training loss averages reconstruction over
+    # increasing prefix sizes so early latents must be independently useful.
+    matryoshka_sae: bool = False
+    matryoshka_levels: int = 1
+    matryoshka_min_group_fraction: float = 1.0 / 64
 
     # Training Parameters
     l1_coefficient: float = 1e-3
@@ -95,11 +127,17 @@ class ViTSAERunnerConfig:
     # Misc
     n_checkpoints: int = 0
     checkpoint_path: str = "checkpoints"
+    experiment_metadata: Optional[dict] = None
 
     image_key = "image"
     label_key = "label"
 
     def __post_init__(self):
+        if self.training_examples is None:
+            self.training_examples = self.total_training_tokens
+        else:
+            self.total_training_tokens = self.training_examples
+
         self.store_size = self.n_batches_in_store * self.batch_size
 
         # Autofill cached_activations_path unless the user overrode it

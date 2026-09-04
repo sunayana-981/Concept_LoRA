@@ -1,0 +1,29 @@
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{Generic SAEs for three additional backbones under two additional SAE
+architectures.} All six dictionaries are trained from scratch on ImageNet activations
+hooked at layer $-2$ with expansion factor $64$; MSE is final training reconstruction
+error. The reduced column is a shared-GPU run at $131$K tokens, the full column a
+dedicated run at $2.62$M. Two things are visible. First, the token budget matters far
+more to JumpReLU than to Top-$k$ ($\sim\!45\%$ MSE reduction vs.\ $\sim\!25$--$40\%$),
+consistent with a learned per-unit threshold needing more data to settle than a fixed
+structural sparsity constraint. Second, Top-$k$'s lower absolute error is
+\emph{not} a like-for-like architectural comparison: Top-$k$ is pinned at $k=32$ while
+JumpReLU learns its own operating point, whose realised $L_0$ we do not measure here.}
+\label{tab:expanded_base_sae}
+\setlength{\tabcolsep}{7pt}
+\begin{tabular}{llccc}
+\toprule
+\textbf{Backbone} & \textbf{SAE} & $\mathbf{d_{SAE}}$ & \textbf{MSE @131K tok} & \textbf{MSE @2.62M tok} \\
+\midrule
+DINOv2~\citep{oquab2024dinov2}   & Top-$k$   & 49{,}152 & 0.008 & \bf 0.007 \\
+ALIGN~\citep{jia2021scaling}     & Top-$k$   & 40{,}960 & 0.008 & \bf 0.005 \\
+SigLIP2~\citep{tschannen2025siglip2} & Top-$k$ & 49{,}152 & 0.010 & \bf 0.006 \\
+\midrule
+DINOv2   & JumpReLU & 49{,}152 & --- & 0.020 \\
+ALIGN    & JumpReLU & 40{,}960 & 0.032 & 0.018 \\
+SigLIP2  & JumpReLU & 49{,}152 & 0.035 & 0.022 \\
+\bottomrule
+\end{tabular}
+\end{table}

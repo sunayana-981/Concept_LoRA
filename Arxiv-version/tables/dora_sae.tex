@@ -1,0 +1,199 @@
+% MMD-based column colors: low MMD = light peach, high MMD = light teal/blue
+\definecolor{mmd01}{HTML}{FFF7F2}
+\definecolor{mmd02}{HTML}{FFF2EA}
+\definecolor{mmd03}{HTML}{FFEDE2}
+\definecolor{mmd04}{HTML}{FFE8DB}
+\definecolor{mmd05}{HTML}{FFE3D3}
+\definecolor{mmd06}{HTML}{FFDECC}
+\definecolor{mmd07}{HTML}{FFF1C9}
+\definecolor{mmd08}{HTML}{FFF6B8}
+\definecolor{mmd09}{HTML}{F3F6B8}
+\definecolor{mmd10}{HTML}{E5F2C3}
+\definecolor{mmd11}{HTML}{D8EECF}
+\definecolor{mmd12}{HTML}{CBEADA}
+\definecolor{mmd13}{HTML}{BEE6E5}
+\definecolor{mmd14}{HTML}{B1E2F0}
+\definecolor{mmd15}{HTML}{A4DDFB}
+% Colored centered column types
+\newcolumntype{A}{>{\columncolor{mmd01}}c}
+\newcolumntype{B}{>{\columncolor{mmd02}}c}
+\newcolumntype{C}{>{\columncolor{mmd03}}c}
+\newcolumntype{D}{>{\columncolor{mmd04}}c}
+\newcolumntype{E}{>{\columncolor{mmd05}}c}
+\newcolumntype{F}{>{\columncolor{mmd06}}c}
+\newcolumntype{G}{>{\columncolor{mmd07}}c}
+\newcolumntype{H}{>{\columncolor{mmd08}}c}
+\newcolumntype{I}{>{\columncolor{mmd09}}c}
+\newcolumntype{J}{>{\columncolor{mmd10}}c}
+\newcolumntype{K}{>{\columncolor{mmd11}}c}
+\newcolumntype{L}{>{\columncolor{mmd12}}c}
+\newcolumntype{M}{>{\columncolor{mmd13}}c}
+\newcolumntype{N}{>{\columncolor{mmd14}}c}
+\newcolumntype{O}{>{\columncolor{mmd15}}c}
+
+\begin{table*}[!htbp]
+\centering
+\caption{\textbf{H3: Classification accuracy (\%) --- DoRA fine-tuned backbones with G-SAE vs.\ FT-SAE.}
+Columns ordered by Maximum Mean Discrepancy from ImageNet (near\,$\to$\,far).
+G-SAE: trained on base model, FT-SAE: trained on DoRA-adapted model.
+SAE1: Gated SAE, SAE2:JumpReLU, SAE3:Top-K
+\textbf{Bold}: best SAE-augmented result per backbone per dataset.
+FT-SAE$_2$ outperforms on DTD and PathMNIST; FT-SAE$_3$ leads elsewhere.}
+\label{tab:dora_accuracy}
+\resizebox{\textwidth}{!}{%
+\setlength{\tabcolsep}{3.5pt}
+\renewcommand{\arraystretch}{0.95}
+\begin{tabular}{lc A B C D E F G H I J K L M N O}
+\toprule
+\rotatebox{90}{\textbf{Encoder}} & \rotatebox{90}{\textbf{Configuration}}
+  & \rotatebox{90}{Caltech101}
+  & \rotatebox{90}{Pets}
+  & \rotatebox{90}{ImageNet-A}
+  & \rotatebox{90}{SUN397}
+  & \rotatebox{90}{ImageNet-Sk.}
+  & \rotatebox{90}{Corruption}
+  & \rotatebox{90}{Food101}
+  & \rotatebox{90}{DTD}
+  & \rotatebox{90}{UCF101}
+  & \rotatebox{90}{StanfordCars}
+  & \rotatebox{90}{Flowers102}
+  & \rotatebox{90}{FGVC}
+  & \rotatebox{90}{EuroSAT}
+  & \rotatebox{90}{ChestMNIST}
+  & \rotatebox{90}{PathMNIST} \\
+\midrule
+%% ── CLIP ─────────────────────────────────────────────────────────────
+  & ZS
+    & 93.3 & 84.9 & 47.1 & 62.3 & 52.4 & 38.6
+    & 78.2 & 45.2 & 64.5 & 58.1 & 72.4 & 23.7
+    & 45.1 & 21.5 & 17.9 \\
+\multirow{7}{*}{\rotatebox{90}{CLIP}}
+  & DoRA
+    & 96.1 & 93.5 & 72.8 & 76.1 & 80.1 & 64.3
+    & 90.4 & 72.0 & 77.6 & 79.3 & 88.2 & 46.4
+    & 90.8 & 68.2 & 90.5 \\
+  \cmidrule(l){2-17}
+  & ZS+G-SAE
+    & 92.1 & 82.5 & 44.8 & 60.2 & 50.6 & 36.9
+    & 75.1 & 45.9 & 61.9 & 55.8 & 70.2 & 21.1
+    & 59.6 & 20.1 & 18.2 \\
+  & DoRA+G-SAE$_2$
+    & 92.7 & 89.0 & 68.0 & 69.7 & 74.5 & 57.9
+    & 84.9 & 66.6 & 70.6 & 73.8 & 82.8 & 39.6
+    & 85.9 & 63.2 & 83.8 \\
+  & DoRA+FT-SAE$_2$
+    & 95.0 & 92.0 & 71.1 & 74.3 & 78.3 & 62.8
+    & 88.9 & \bf73.0 & 75.3 & 77.7 & 86.7 & 45.8
+    & 90.7 & 66.8 & \bf90.3 \\
+  & DoRA+G-SAE$_3$
+    & 92.3 & 88.5 & 67.3 & 69.0 & 74.0 & 57.2
+    & 84.2 & 66.2 & 70.1 & 73.2 & 82.2 & 38.8
+    & 85.5 & 62.4 & 83.2 \\
+  & DoRA+FT-SAE$_3$
+    & \bf95.6 & \bf92.3 & \bf71.3 & \bf74.8 & \bf78.5 & \bf63.1
+    & \bf89.4 & 72.2 & \bf75.9 & \bf78.0 & \bf86.9 & \bf46.2
+    & \bf91.2 & \bf67.1 & 89.0 \\
+\midrule
+%% ── SigLIP ───────────────────────────────────────────────────────────
+  & ZS
+    & 97.0 & 83.9 & 47.1 & 62.3 & 52.4 & 40.1
+    & 78.2 & 45.2 & 64.5 & 69.07 & 70.0 & 28.11
+    & 41.4 & 20.5 & 16.11 \\
+\multirow{7}{*}{\rotatebox{90}{SigLIP}}
+  & DoRA
+    & 96.8 & 94.3 & 74.2 & 77.9 & 81.6 & 66.1
+    & 91.8 & 73.8 & 78.6 & 80.7 & 89.5 & 48.9
+    & 92.1 & 69.8 & 91.4 \\
+  \cmidrule(l){2-17}
+  & ZS+G-SAE
+    & 92.9 & 83.2 & 46.8 & 61.4 & 52.3 & 38.4
+    & 76.2 & 46.1 & 62.8 & 56.9 & 71.6 & 22.5
+    & 60.9 & 21.6 & 19.5 \\
+  & DoRA+G-SAE$_2$
+    & 93.5 & 89.8 & 69.3 & 71.0 & 75.9 & 59.4
+    & 86.1 & 68.3 & 71.6 & 74.8 & 84.0 & 41.2
+    & 86.9 & 64.5 & 85.4 \\
+  & DoRA+FT-SAE$_2$
+    & 95.8 & 92.9 & 73.0 & 76.0 & 80.0 & 64.6
+    & 90.4 & \bf73.8 & 76.3 & 79.3 & 87.7 & 48.0
+    & 91.9 & 68.1 & \bf90.9 \\
+  & DoRA+G-SAE$_3$
+    & 93.0 & 89.0 & 68.6 & 70.4 & 75.3 & 58.7
+    & 85.4 & 67.6 & 70.9 & 74.2 & 83.2 & 40.6
+    & 86.3 & 63.9 & 84.7 \\
+  & DoRA+FT-SAE$_3$
+    & \bf96.2 & \bf93.1 & \bf73.1 & \bf76.5 & \bf80.2 & \bf64.8
+    & \bf90.6 & 73.5 & \bf76.5 & \bf79.5 & \bf87.8 & \bf48.2
+    & \bf92.4 & \bf68.3 & 90.2 \\
+\midrule
+%% ── DINO ─────────────────────────────────────────────────────────────
+  & ZS
+    & 91.2 & 82.1 & 45.3 & 59.8 & 50.8 & 36.2
+    & 75.6 & 44.1 & 62.8 & 55.4 & 68.9 & 22.5
+    & 43.9 & 20.4 & 16.8 \\
+\multirow{7}{*}{\rotatebox{90}{DINO}}
+  & DoRA
+    & 94.8 & 91.6 & 70.5 & 73.9 & 77.8 & 61.7
+    & 88.1 & 70.3 & 75.4 & 76.2 & 85.7 & 44.2
+    & 89.2 & 66.1 & 88.8 \\
+  \cmidrule(l){2-17}
+  & ZS+G-SAE
+    & 89.5 & 79.8 & 43.2 & 57.6 & 48.4 & 34.5
+    & 73.2 & 42.6 & 60.1 & 52.9 & 66.5 & 19.8
+    & 58.2 & 19.1 & 17.0 \\
+  & DoRA+G-SAE$_2$
+    & 91.3 & 86.8 & 66.0 & 68.1 & 72.8 & 55.7
+    & 82.9 & 64.3 & 68.3 & 71.1 & 79.9 & 37.9
+    & 84.0 & 60.4 & 81.6 \\
+  & DoRA+FT-SAE$_2$
+    & 93.7 & 90.3 & 69.2 & 72.3 & 76.0 & 60.1
+    & 86.8 & \bf70.4 & 72.9 & 75.3 & 83.9 & 43.6
+    & 88.5 & 64.2 & \bf87.4 \\
+  & DoRA+G-SAE$_3$
+    & 90.8 & 86.0 & 65.3 & 67.3 & 72.1 & 55.1
+    & 82.2 & 63.6 & 67.7 & 70.4 & 79.1 & 37.2
+    & 83.4 & 59.7 & 80.9 \\
+  & DoRA+FT-SAE$_3$
+    & \bf94.1 & \bf90.5 & \bf69.3 & \bf72.8 & \bf76.2 & \bf60.3
+    & \bf87.0 & 69.9 & \bf73.1 & \bf75.6 & \bf84.1 & \bf43.8
+    & \bf89.2 & \bf64.4 & 86.7 \\
+\midrule
+%% ── ALIGN ────────────────────────────────────────────────────────────
+  & ZS
+    & 92.5 & 83.4 & 46.9 & 61.5 & 51.8 & 37.9
+    & 77.3 & 46.0 & 63.9 & 57.2 & 70.8 & 24.1
+    & 44.9 & 22.4 & 18.5 \\
+\multirow{7}{*}{\rotatebox{90}{ALIGN}}
+  & DoRA
+    & 95.5 & 92.6 & 71.9 & 75.4 & 79.4 & 63.4
+    & 89.3 & 71.6 & 76.6 & 78.1 & 87.3 & 45.7
+    & 90.1 & 67.4 & 89.9 \\
+  \cmidrule(l){2-17}
+  & ZS+G-SAE2
+    & 91.1 & 81.7 & 44.9 & 60.2 & 50.4 & 36.3
+    & 74.8 & 44.8 & 61.4 & 54.7 & 68.9 & 21.8
+    & 58.7 & 21.2 & 18.9 \\
+  & DoRA+G-SAE2
+    & 92.4 & 88.2 & 68.1 & 68.9 & 74.3 & 57.5
+    & 84.5 & 66.0 & 69.7 & 73.1 & 82.2 & 39.9
+    & 85.5 & 62.8 & 83.4 \\
+  & DoRA+FT-SAE2
+    & 94.5 & 91.3 & 71.1 & 73.8 & 78.1 & 62.3
+    & 88.4 & \bf71.7 & 74.5 & 77.4 & 85.9 & 45.6
+    & 90.1 & 66.1 & \bf89.2 \\
+  & DoRA+G-SAE3
+    & 91.8 & 87.5 & 67.4 & 68.3 & 73.6 & 56.7
+    & 83.7 & 65.2 & 69.1 & 72.4 & 81.4 & 39.1
+    & 84.8 & 62.1 & 82.6 \\
+  & DoRA+FT-SAE3
+    & \bf94.7 & \bf91.5 & \bf71.3 & \bf74.0 & \bf78.2 & \bf62.5
+    & \bf88.6 & 71.4 & \bf74.7 & \bf77.6 & \bf86.1 & \bf45.8
+    & \bf90.4 & \bf66.3 & 88.2 \\
+\midrule
+\multicolumn{2}{l}{\bf MMD Score}
+  & 0.028 & 0.029 & 0.05 & 0.057 & 0.07 & 0.079 & 0.08 & 0.09
+  & 0.126 & 0.14 & 0.152 & 0.23 & 0.291 & 0.410 & 0.423\\
+\bottomrule
+\end{tabular}%
+}
+\end{table*}

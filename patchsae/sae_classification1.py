@@ -160,6 +160,20 @@ def convert_openai_to_hf_clip(openai_state_dict):
 # ==========================================
 # SAE Application Functions
 # ==========================================
+def _reconstruct_in_chunks(flat_feats, sae_model, chunk_tokens=512):
+    """Run SAE reconstruction without materializing all token-feature acts at once.
+
+    A 49,152-wide SAE at batch 64 and 197 tokens otherwise creates a single
+    2.31 GiB feature tensor. Only the reconstruction is needed by these hooks,
+    so bounded token chunks keep peak memory independent of image batch size.
+    """
+    reconstructed = []
+    for chunk in flat_feats.split(chunk_tokens, dim=0):
+        sae_output = sae_model(chunk)
+        reconstructed.append(sae_output[0] if isinstance(sae_output, tuple) else sae_output)
+    return torch.cat(reconstructed, dim=0)
+
+
 def apply_sae_preserve_cls(internal_feats, sae_model):
     """Preserve CLS token, only reconstruct patches."""
     b, s, d = internal_feats.shape
@@ -169,11 +183,7 @@ def apply_sae_preserve_cls(internal_feats, sae_model):
     
     patch_flat = patch_tokens.reshape(-1, d)
     
-    sae_output = sae_model(patch_flat)
-    if isinstance(sae_output, tuple):
-        patch_reconstructed = sae_output[0]
-    else:
-        patch_reconstructed = sae_output
+    patch_reconstructed = _reconstruct_in_chunks(patch_flat, sae_model)
     
     patch_reconstructed = patch_reconstructed.view(b, s-1, d)
     reconstructed = torch.cat([cls_token, patch_reconstructed], dim=1)
@@ -185,11 +195,7 @@ def apply_sae_blended(internal_feats, sae_model, alpha=0.2):
     b, s, d = internal_feats.shape
     
     flat_feats = internal_feats.view(-1, d)
-    sae_output = sae_model(flat_feats)
-    if isinstance(sae_output, tuple):
-        reconstructed_flat = sae_output[0]
-    else:
-        reconstructed_flat = sae_output
+    reconstructed_flat = _reconstruct_in_chunks(flat_feats, sae_model)
     
     reconstructed = reconstructed_flat.view(b, s, d)
     blended = alpha * reconstructed + (1.0 - alpha) * internal_feats
@@ -201,11 +207,7 @@ def apply_sae_original(internal_feats, sae_model):
     b, s, d = internal_feats.shape
     flat_feats = internal_feats.view(-1, d)
     
-    sae_output = sae_model(flat_feats)
-    if isinstance(sae_output, tuple):
-        reconstructed_flat = sae_output[0]
-    else:
-        reconstructed_flat = sae_output
+    reconstructed_flat = _reconstruct_in_chunks(flat_feats, sae_model)
     
     return reconstructed_flat.view(b, s, d)
 

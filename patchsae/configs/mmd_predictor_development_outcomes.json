@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "purpose": "Machine-readable audit of the planned 15-domain MMD predictor development cohort. A paired outcome requires LoRA/no-SAE and the same LoRA model with the fixed ImageNet G-SAE, evaluated on identical examples.",
+  "endpoint_id": "lora_no_sae_minus_lora_gsae_accuracy_pp",
+  "source_distance_table": "../distance_results.csv",
+  "source_existing_outcomes": "out/workshop_paper/matrix_final_standard/results.csv",
+  "gsae_checkpoint": "data/sae_weight/base/out.pt",
+  "evaluation_protocol": {
+    "vit_types": [
+      "lora"
+    ],
+    "sae_conditions": [
+      "none",
+      "gsae"
+    ],
+    "evaluation_seed": 42,
+    "max_images": 1500,
+    "val_split": 0.15,
+    "note": "Use the same max_images, split, prompts/class names, checkpoint format, and evaluation seed for both cells and all domains. Do not mix the older 225-image matrix with new larger evaluations in a confirmatory fit; rerun the full 15-domain cohort under one protocol."
+  },
+  "existing_paired_outcomes_in_current_matrix": [
+    "eurosat",
+    "dtd",
+    "caltech101",
+    "cub2002011",
+    "ucf101"
+  ],
+  "auxiliary_existing_domain_not_in_planned_15": [
+    "fgvc"
+  ],
+  "missing_paired_outcomes": [
+    "imagenet-r",
+    "imagenetv2",
+    "flowers102",
+    "imagenet-a",
+    "imagenet-o",
+    "sketch",
+    "pathmnist",
+    "oxford_pets",
+    "stanford_cars",
+    "food101"
+  ],
+  "ready_now_run": {
+    "datasets": [
+      "pathmnist",
+      "pets"
+    ],
+    "canonical_output_names": {
+      "pathmnist": "pathmnist",
+      "pets": "oxford_pets"
+    },
+    "command": "python tasks/eval_matrix.py --datasets pathmnist pets --vit_types lora --sae_conditions none gsae --dataset_registry configs/rebuttal_datasets.json --gsae_path data/sae_weight/base/out.pt --seed 42 --batch_size 8 --max_images 1500 --val_split 0.15 --out_dir out/rebuttal/mmd_predictor_dev_ready"
+  },
+  "domains": [
+    {
+      "dataset": "eurosat",
+      "distance_dataset": "eurosat",
+      "mmd_available": true,
+      "paired_outcome_available": true,
+      "adapter_checkpoint": "../lora_weights/vitb16/eurosat/16shots/seed1/lora_weights.pt",
+      "evaluation_status": "existing_current_matrix"
+    },
+    {
+      "dataset": "dtd",
+      "distance_dataset": "dtd",
+      "mmd_available": true,
+      "paired_outcome_available": true,
+      "adapter_checkpoint": "../lora_weights/vitb16/dtd/16shots/seed42/lora_weights.pt",
+      "evaluation_status": "existing_current_matrix_seed42_adapter"
+    },
+    {
+      "dataset": "imagenet-r",
+      "distance_dataset": "imagenet-r",
+      "mmd_available": true,
+      "paired_outcome_available": false,
+      "adapter_checkpoint": "../unified_weights/vitb16/imagenet_r/16shots/seed1/lora_adapter_weights.pt",
+      "evaluation_status": "blocked_on_semantic_classname_mapping",
+      "blocker": "ImageFolder names are WordNet IDs. eval_matrix currently turns folder names directly into text prompts, so a WordNet-ID-to-class-name mapping must be supplied before this accuracy endpoint is valid."
+    },
+    {
+      "dataset": "imagenetv2",
+      "distance_dataset": "imagenetv2",
+      "mmd_available": true,
+      "paired_outcome_available": false,
+      "adapter_checkpoint": "../unified_weights/vitb16/imagenet_v2/16shots/seed1/lora_adapter_weights.pt",
+      "evaluation_status": "blocked_on_semantic_classname_mapping",
+      "blocker": "ImageFolder names are numeric ImageNet indices and cannot be used directly as CLIP text prompts."
+    },
+    {
+      "dataset": "caltech101",
+      "distance_dataset": "caltech-101",
+      "mmd_available": true,
+      "paired_outcome_available": true,
+      "adapter_checkpoint": "../lora_weights/vitb16/caltech101/16shots/seed1/lora_weights.pt",
+      "evaluation_status": "existing_current_matrix"
+    },
+    {
+      "dataset": "flowers102",
+      "distance_dataset": "flowers102",
+      "mmd_available": true,
+      "paired_outcome_available": false,
+      "adapter_checkpoint": "../unified_weights/vitb16/oxford_flowers/16shots/seed1/lora_adapter_weights.pt",
+      "evaluation_status": "blocked_on_semantic_classname_mapping",
+      "blocker": "ImageFolder class directories are numeric labels; use the Oxford Flowers category-name mapping for CLIP prompts."
+    },
+    {
+      "dataset": "imagenet-a",
+      "distance_dataset": "imagenet-a",
+      "mmd_available": true,
+      "paired_outcome_available": false,
+      "adapter_checkpoint": "../unified_weights/vitb16/imagenet_a/16shots/seed1/lora_adapter_weights.pt",
+      "evaluation_status": "blocked_on_semantic_classname_mapping",
+      "blocker": "ImageFolder names are WordNet IDs; add the same canonical ImageNet class-name mapping used during adapter evaluation."
+    },
+    {
+      "dataset": "imagenet-o",
+      "distance_dataset": "imagenet-o",
+      "mmd_available": true,
+      "paired_outcome_available": false,
+      "adapter_checkpoint": null,
+      "evaluation_status": "blocked_on_missing_clip_lora_checkpoint_and_classnames",
+      "blocker": "No CLIP ViT-B/16 LoRA checkpoint was found locally for ImageNet-O, and WordNet IDs need semantic class names."
+    },
+    {
+      "dataset": "sketch",
+      "distance_dataset": "sketch",
+      "mmd_available": true,
+      "paired_outcome_available": false,
+      "adapter_checkpoint": "../unified_weights/vitb16/imagenet_sketch/16shots/seed1/lora_adapter_weights.pt",
+      "evaluation_status": "blocked_on_semantic_classname_mapping",
+      "blocker": "ImageFolder names are WordNet IDs; add the canonical ImageNet class-name mapping."
+    },
+    {
+      "dataset": "pathmnist",
+      "distance_dataset": "pathmnist",
+      "mmd_available": true,
+      "paired_outcome_available": false,
+      "adapter_checkpoint": "../lora_weights/vitb16/medmnist/16shots/seed1/lora_weights.pt",
+      "evaluation_status": "ready_now_as_registry_name_pathmnist"
+    },
+    {
+      "dataset": "cub2002011",
+      "distance_dataset": "cub200",
+      "mmd_available": true,
+      "paired_outcome_available": true,
+      "adapter_checkpoint": "../lora_weights/vitb16/cub2002011/16shots/seed1/lora_weights.pt",
+      "evaluation_status": "existing_current_matrix"
+    },
+    {
+      "dataset": "ucf101",
+      "distance_dataset": "UCF101",
+      "mmd_available": true,
+      "paired_outcome_available": true,
+      "adapter_checkpoint": "../lora_weights/vitb16/ucf101/16shots/seed1/lora_weights.pt",
+      "evaluation_status": "existing_current_matrix"
+    },
+    {
+      "dataset": "oxford_pets",
+      "distance_dataset": "oxford_pets",
+      "mmd_available": true,
+      "paired_outcome_available": false,
+      "adapter_checkpoint": "../lora_weights/vitb16/oxford_pets/16shots/seed1/lora_weights.pt",
+      "evaluation_status": "ready_now_as_registry_name_pets"
+    },
+    {
+      "dataset": "stanford_cars",
+      "distance_dataset": "stanford_cars",
+      "mmd_available": true,
+      "paired_outcome_available": false,
+      "adapter_checkpoint": "../unified_weights/vitb16/stanford_cars/16shots/seed1/lora_adapter_weights.pt",
+      "evaluation_status": "blocked_on_dataset_loader_and_semantic_classnames",
+      "blocker": "Local data are Hugging Face parquet shards, while eval_matrix accepts ImageFolder/MedMNIST NPZ. Add a parquet loader or a provenance-preserving ImageFolder conversion and the Cars class-name mapping."
+    },
+    {
+      "dataset": "food101",
+      "distance_dataset": "food101",
+      "mmd_available": true,
+      "paired_outcome_available": false,
+      "adapter_checkpoint": "../unified_weights/vitb16/food101/16shots/seed1/lora_adapter_weights.pt",
+      "evaluation_status": "blocked_on_dataset_loader",
+      "blocker": "Local data are Hugging Face parquet shards, while eval_matrix accepts ImageFolder/MedMNIST NPZ."
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+
+
+In this paper, we study how adapting a Large Pre-Trained Model~$L$ with an adapter~$A$ affects its interpretability under a mechanistic interpretability tool~$S$.
+We consider combinations of several visual encoders, adapters, and Sparse Auto-Encoders (SAEs) for this study. A \emph{Generic SAE} (G-SAE) $\bar{S}_L$ is trained on activations of~$L$ using a large, pretraining-like corpus (we use ImageNet in this paper). A \emph{Finetuned SAE} (FT-SAE) $S_{\hat{L}}$ is trained on the adapted model~$\hat{L}$ using the target dataset. We evaluate three configurations and the gaps between them to understand SAE behavior.
+\begin{enumerate}[leftmargin=5mm, nosep]
+    \item {ZS+G-SAE}: $\bar{S}_L(L(I))$: the base model with the generic SAE (reference);
+    \item {FT+G-SAE}: $\bar{S}_L(\hat{L}(I))$: adapted model with the generic SAE. The gap from the previous indicates how far adaptation pushes activations off the base dictionary.
+    \item {FT+FT-SAE}: $S_{\hat{L}}(\hat{L}(I))$: adapted model with the SAE trained on it. The gap from the previous indicates how much the Generic SAE must adapt.
+\end{enumerate}
+
+%\noindent\textbf{SAE variants.}
+%Rather than committing to a single architecture, we sweep ReLU~\citep{cunningham2024sparse}, Top-$k$~\citep{gao2025scaling}, Gated~\citep{rajamanoharan2024improving}, Matryoshka~\citep{bussmann2025matryoshka,zaremba2025msae}, and PatchSAE~\citep{lim2024patchsae} (details in Appendix~\ref{app:sae-variants}). We foreground PatchSAE because it operates on patch tokens, supporting both local analysis (textures, artefacts, acquisition noise) and their global composition into semantic categories; the remaining variants are trained on CLS-token activations.
+
+%\noindent\textbf{Paired training.}
+%The standard protocol trains one SAE on ImageNet activations from the base model and silently reuses it across downstream datasets. We turn that assumption into a testable claim: for every (encoder, adapter, dataset) triple we train both a G-SAE on~~$L$ and an FT-SAE on~~$\hat{L}$.
+
+\noindent\textbf{Diagnostics} (formal definitions in Appendix~\ref{app:metrics}).
+We compute four checks on each configuration:
+(i)~\emph{Predictive utility} — classification accuracy after replacing activations with their SAE reconstruction~\citep{lim2024patchsae}; a drop for FT+G-SAE relative to the FT-SAE oracle indicates the generic dictionary no longer carries the information the adapted model uses.
+(ii)~\emph{Reconstruction fidelity} — MSE $E_{\mathrm{rec}}=\mathbb{E}[\|\mathrm{SAE}(z)-z\|_2^2]$; high $E_{\mathrm{rec}}$ for FT+G-SAE paired with low $E_{\mathrm{rec}}$ for FT+FT-SAE is a direct signature of dictionary drift.
+(iii)~\emph{Sparsity \& usage} — per-latent activation frequency and mean activation~\citep{cunningham2024sparse,gao2025scaling}; adaptation may induce dead features, diffuse activations, or concentration on a narrower latent set.
+(iv)~\emph{Selectivity} — label entropy over activation-weighted class distributions and monosemanticity~\citep{cunningham2024sparse} (pairwise cosine similarity in CLIP space among top-activating images); low entropy $=$ single-label concentration.

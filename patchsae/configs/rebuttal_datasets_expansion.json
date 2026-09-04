@@ -1,0 +1,30 @@
+{
+  "imagenet_r": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/imagenet-r",
+    "classname_map": "/home/sunayana/Documents/Concept_LoRA/patchsae/configs/classnames/imagenet_classnames.txt",
+    "classname_map_mode": "wnid",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/unified_weights/vitb16/imagenet_r/16shots/seed1/lora_adapter_weights.pt"
+  },
+  "imagenet_a": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/imagenet-a",
+    "classname_map": "/home/sunayana/Documents/Concept_LoRA/patchsae/configs/classnames/imagenet_classnames.txt",
+    "classname_map_mode": "wnid",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/unified_weights/vitb16/imagenet_a/16shots/seed1/lora_adapter_weights.pt"
+  },
+  "imagenet_sketch": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/sketch",
+    "classname_map": "/home/sunayana/Documents/Concept_LoRA/patchsae/configs/classnames/imagenet-sketch_classnames.txt",
+    "classname_map_mode": "wnid",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/unified_weights/vitb16/imagenet_sketch/16shots/seed1/lora_adapter_weights.pt"
+  },
+  "imagenet_v2": {
+    "type": "imagefolder",
+    "path": "/home/sunayana/Documents/Concept_LoRA/data/imagenetv2/imagenetv2-matched-frequency-format-val",
+    "classname_map": "/home/sunayana/Documents/Concept_LoRA/patchsae/configs/classnames/imagenet_classnames.txt",
+    "classname_map_mode": "numeric_index",
+    "lora_checkpoint": "/home/sunayana/Documents/Concept_LoRA/unified_weights/vitb16/imagenet_v2/16shots/seed1/lora_adapter_weights.pt"
+  }
+}
